@@ -6,7 +6,7 @@
 
 var Sprites = (function () {
   'use strict';
-  var OUT = '#241c2b';            /* 统一描边色 */
+  var OUT = '#16121f';            /* 统一描边色（深紫黑，像素间足够对比） */
   var cache = {};                 /* 键控离屏画布缓存 */
 
   function cv(w, h) {
@@ -94,6 +94,48 @@ var Sprites = (function () {
       var t = y / this.h;
       if (t < 0.28) this.set(x, y, U.shade(c, 0.10));
       else if (t > 0.72) this.set(x, y, U.shade(c, -0.16));
+    }
+  };
+  /* 方向光五档硬色阶：光源固定左上，按像素相对形心的朝向分档。
+     对齐 demo 的 dcTones 手法——平涂色块变成有体积的像素光影 */
+  Grid.prototype.lightRamp = function (strength) {
+    strength = strength || 1;
+    var x, y, minX = 1e9, minY = 1e9, maxX = -1, maxY = -1, n = 0;
+    for (y = 0; y < this.h; y++) for (x = 0; x < this.w; x++) {
+      if (this.get(x, y)) {
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        n++;
+      }
+    }
+    if (!n || maxX < 0) return;
+    var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    var rx = Math.max(1, (maxX - minX) / 2), ry = Math.max(1, (maxY - minY) / 2);
+    var tones = [-0.17, -0.07, 0, 0.09, 0.17];
+    for (y = minY; y <= maxY; y++) for (x = minX; x <= maxX; x++) {
+      var c = this.get(x, y);
+      if (!c || c === OUT) continue;
+      var dx = (x - cx) / rx, dy = (y - cy) / ry;
+      /* 光源方向 (-0.7,-0.7) 归一化后的点积 */
+      var lit = (dx * -0.707 + dy * -0.707) / Math.max(1, Math.sqrt(dx * dx + dy * dy) * 0.9);
+      var ti = lit < -0.45 ? 0 : lit < -0.12 ? 1 : lit < 0.12 ? 2 : lit < 0.45 ? 3 : 4;
+      var off = tones[ti] * strength;
+      if (off) this.set(x, y, U.shade(c, off));
+    }
+  };
+  /* 轮廓内侧顶光：上/左邻空 → 提亮，下/右邻空 → 压暗（细杆跳过防整条腿全亮） */
+  Grid.prototype.topLight = function () {
+    var snap = this.d.slice(), x, y;
+    function at(i, xx, yy) { return xx < 0 || yy < 0 || xx >= this.w || yy >= this.h ? undefined : snap[yy * this.w + xx]; }
+    for (y = 0; y < this.h; y++) for (x = 0; x < this.w; x++) {
+      var c = snap[y * this.w + x];
+      if (!c || c === OUT) continue;
+      var up = at.call(this, 0, x, y - 1), dn = at.call(this, 0, x, y + 1);
+      var le = at.call(this, 0, x - 1, y), ri = at.call(this, 0, x + 1, y);
+      /* 上下皆空的细杆（尾梢/腿）不上下染色 */
+      if (!up && !dn) { if (!le) this.set(x, y, U.shade(c, 0.14)); continue; }
+      if (!up || !le) this.set(x, y, U.shade(c, 0.16));
+      else if (!dn || !ri) this.set(x, y, U.shade(c, -0.13));
     }
   };
   Grid.prototype.render = function (scale, c) {
@@ -358,15 +400,21 @@ var Sprites = (function () {
     if (opt.walk) { /* 走路帧：整体下沉 1px + 耳尾抖动由绘制端处理 */
       g.set(CW - 1, CH - 2, null);
     }
-    g.celShade();
+    if (!opt.noLight) { g.lightRamp(1); g.topLight(); }
     g.outline(OUT);
     return g;
   }
   function creatureCv(spId, frame, flip, shiny) {
     return mk('cr|' + spId + '|' + (frame || 0) + '|' + (flip ? 1 : 0) + '|' + (shiny ? 1 : 0),
       CW * 2, CH * 2, function (g2, c) {
-        var g = creatureGrid(spId);
-        if (flip) g = g.flipX();
+        var g = creatureGrid(spId, { noLight: flip });
+        if (flip) {
+          /* 翻转后重新烘焙光照：保持光源永远在画面左上，不随朝向镜像反转 */
+          g = g.flipX();
+          g.lightRamp(1);
+          g.topLight();
+          g.outline(OUT);
+        }
         if (frame === 1) { /* 第二帧：整体上移 1 逻辑像素，模拟跑动起伏 */
           var g2b = new Grid(CW, CH), x, y;
           for (y = 0; y < CH - 1; y++) for (x = 0; x < CW; x++) g2b.d[y * CW + x] = g.get(x, y + 1);
@@ -392,12 +440,12 @@ var Sprites = (function () {
   function playerGrid(clsId, tier, frame, flip) {
     return mk('pl|' + clsId + '|' + tier + '|' + frame + '|' + (flip ? 1 : 0), 32, 44, function (g, c) {
       var gr = new Grid(16, 22);
-      var tunic = ['#7a8a5a', '#6a7a90', '#7898a0'][tier];       /* 按装备档位换色 */
-      var trim = ['#5a6a40', '#4c5a6c', '#587880'][tier];
+      var tunic = ['#7a8a5a', '#6a7a90', '#7898a0', '#7c94b8'][tier];       /* 按装备档位换色（3=寒铁） */
+      var trim = ['#5a6a40', '#4c5a6c', '#587880', '#5c7398'][tier];
       var bob = frame === 1 ? 1 : 0;
       /* 腿 */
       gr.rect(6, 16 + bob, 2, 5, '#3a3440'); gr.rect(9, 16 + (1 - bob), 2, 5, '#3a3440');
-      gr.rect(6, 21 + bob, 2, 1, '#241c2b'); gr.rect(9, 21 + (1 - bob), 2, 1, '#241c2b');
+      gr.rect(6, 21 + bob, 2, 1, OUT); gr.rect(9, 21 + (1 - bob), 2, 1, OUT);
       /* 躯干 */
       gr.rect(5, 9, 7, 7, tunic);
       gr.rect(5, 15, 7, 1, trim);                  /* 腰带 */
@@ -424,7 +472,7 @@ var Sprites = (function () {
   function weaponCv(wt, tier) {
     return mk('wp|' + wt + '|' + tier, 40, 16, function (g, c) {
       var gr = new Grid(20, 8);
-      var cMetal = ['#b8c4cc', '#7e96a8', '#9fd8e8'][tier];
+      var cMetal = ['#b8c4cc', '#7e96a8', '#9fd8e8', '#c8ecfc'][tier];
       if (wt === 'sword') {
         gr.rect(3, 3, 11, 2, cMetal);
         gr.px(14, 3, U.shade(cMetal, 0.2)); gr.px(15, 4, U.shade(cMetal, 0.2));
@@ -457,7 +505,8 @@ var Sprites = (function () {
         herbalist:{ robe: '#7a9a5c', hair: '#584434', hat: 1 },
         walker:  { robe: '#a05838', hair: '#3c2c1e', hat: 2 },
         keeper:  { robe: '#4a4458', hair: '#242030', hat: 2 },
-        fisher:  { robe: '#587890', hair: '#787060', hat: 1 }
+        fisher:  { robe: '#587890', hair: '#787060', hat: 1 },
+        hunter:  { robe: '#6e7f95', hair: '#4c4238', hat: 4 }
       }[faceId] || { robe: '#888', hair: '#444', hat: 0 };
       var bob = frame === 1 ? 1 : 0;
       gr.rect(6, 16 + bob, 2, 5, '#3a3440'); gr.rect(9, 16 + (1 - bob), 2, 5, '#3a3440');
@@ -470,6 +519,7 @@ var Sprites = (function () {
       if (P.hat === 1) { gr.rect(4, 1, 9, 1.6, U.shade(P.robe, -0.1)); gr.rect(6, 0, 5, 1, U.shade(P.robe, -0.1)); }
       if (P.hat === 2) { gr.rect(4.4, 0.4, 7.4, 1.8, '#4a4440'); }
       if (P.hat === 3) { gr.px(8, -0.4 + 1, '#d8b860'); gr.rect(7, 1, 3, 1, '#d8b860'); }
+      if (P.hat === 4) { gr.rect(4.6, 0.6, 7, 1.8, '#e8eef4'); gr.rect(4.2, 2.2, 8, 1, '#c8d4dc'); }   /* 毛皮风帽 */
       gr.px(7, 5, '#1c1622'); gr.px(9, 5, '#1c1622');
       gr.celShade();
       gr.outline(OUT);
@@ -482,6 +532,8 @@ var Sprites = (function () {
      ============================================================ */
   var TILE_PALETTE = {
     grass:  { base: '#4e8a3c', sp1: '#5c9a48', sp2: '#427632' },
+    peach:  { base: '#6a9a52', sp1: '#7cae62', sp2: '#548244' },
+    sand:   { base: '#d8bc7e', sp1: '#e8cc90', sp2: '#c2a468' },
     dirt:   { base: '#8a7048', sp1: '#987e54', sp2: '#766040' },
     water:  { base: '#2e6ea0', sp1: '#3c7eb0', sp2: '#245a86' },
     lava:   { base: '#c84818', sp1: '#e86828', sp2: '#a03810' },
@@ -490,6 +542,7 @@ var Sprites = (function () {
     cavef:  { base: '#3c3444', sp1: '#484050', sp2: '#302a38' },
     cavew:  { base: '#241e2c', sp1: '#2e2838', sp2: '#1a1622' },
     marsh:  { base: '#3d5c46', sp1: '#49684f', sp2: '#324a3a' },
+    abyss:  { base: '#2a2440', sp1: '#38305a', sp2: '#1e1a30' },
     marshw: { base: '#2c5a54', sp1: '#386860', sp2: '#224640' },
     wood:   { base: '#8c6a42', sp1: '#9c7a50', sp2: '#785a38' },
     path:   { base: '#a08858', sp1: '#ac9464', sp2: '#8c7448' },
@@ -501,28 +554,160 @@ var Sprites = (function () {
       var rnd = mulberry32(kind.charCodeAt(0) * 31 + v * 977 + kind.length * 7);
       g.fillStyle = p.base; g.fillRect(0, 0, TILE, TILE);
       var i, speck;
-      for (i = 0; i < 22; i++) {
+      /* 低频斑块：2~3 大块，替代满屏噪点（demo 手法：底色平涂 + 低频变化） */
+      for (i = 0; i < 3; i++) {
         speck = rnd();
-        g.fillStyle = speck > 0.55 ? p.sp1 : p.sp2;
-        g.fillRect(Math.floor(rnd() * TILE), Math.floor(rnd() * TILE), 2, 2);
+        g.fillStyle = U.rgba(speck > 0.5 ? p.sp1 : p.sp2, 0.5);
+        var bx = rnd() * TILE, by = rnd() * TILE, br = 6 + rnd() * 8;
+        g.beginPath(); g.ellipse(bx, by, br, br * 0.6, rnd() * 3, 0, 6.28); g.fill();
       }
-      if (kind === 'water' || kind === 'marshw' || kind === 'lava') {
-        g.fillStyle = p.sp1;
-        for (i = 0; i < 4; i++) {
-          var y = 3 + i * 7 + (v % 2) * 2, x = ((i * 9 + v * 5) % 24);
-          g.fillRect(x, y, 6, 2);
+      if (kind === 'grass' || kind === 'marsh') {
+        /* 草簇：4~6 处，每簇 2~3 根，顶端亮色高光（振幅足够肉眼可辨） */
+        for (i = 0; i < 5; i++) {
+          var gx = 3 + rnd() * (TILE - 7), gy = 4 + rnd() * (TILE - 8);
+          var blades = 2 + (rnd() * 2 | 0);
+          for (var b = 0; b < blades; b++) {
+            var h2 = 2 + (rnd() * 2 | 0);
+            g.fillStyle = U.shade(p.sp2, -0.08);
+            g.fillRect(gx + b * 2, gy + 2 - h2, 1, h2 + 1);
+            g.fillStyle = U.shade(p.sp1, 0.22);
+            g.fillRect(gx + b * 2, gy + 1 - h2, 1, 1);
+          }
         }
+        if (rnd() < 0.4) { g.fillStyle = U.shade(p.sp1, 0.28); g.fillRect(rnd() * (TILE - 4), rnd() * (TILE - 4), 2, 1); }
+      }
+      if (kind === 'peach') {
+        /* 桃林草地：草簇 + 飘落花瓣点 */
+        for (i = 0; i < 3; i++) {
+          var gx2 = 3 + rnd() * (TILE - 7), gy2 = 4 + rnd() * (TILE - 8);
+          g.fillStyle = U.shade(p.sp2, -0.08);
+          g.fillRect(gx2, gy2, 1, 3);
+          g.fillStyle = U.shade(p.sp1, 0.22);
+          g.fillRect(gx2, gy2 - 1, 1, 1);
+        }
+        for (i = 0; i < 3; i++) {
+          g.fillStyle = i % 2 ? '#f2b8c8' : '#e8a0b8';
+          g.fillRect(rnd() * (TILE - 3), rnd() * (TILE - 3), 2, 1);
+        }
+      }
+      if (kind === 'sand') {
+        /* 流沙：正弦沙纹（暗亮双线，对比拉满）+ 风蚀暗线 */
+        for (i = 0; i < 3; i++) {
+          var wy3 = 5 + i * 10 + rnd() * 4;
+          g.lineWidth = 1;
+          g.strokeStyle = U.rgba(p.sp2, 0.95);
+          g.beginPath(); g.moveTo(0, wy3);
+          for (var wx3 = 0; wx3 <= TILE; wx3 += 4) g.lineTo(wx3, wy3 + Math.sin(wx3 * 0.35 + v + i) * 2.5);
+          g.stroke();
+          g.strokeStyle = U.rgba(p.sp1, 0.8);
+          g.beginPath(); g.moveTo(0, wy3 - 2);
+          for (wx3 = 0; wx3 <= TILE; wx3 += 4) g.lineTo(wx3, wy3 - 2 + Math.sin(wx3 * 0.35 + v + i) * 2.5);
+          g.stroke();
+        }
+        if (rnd() < 0.5) { g.fillStyle = U.rgba(p.sp1, 0.9); g.fillRect(rnd() * (TILE - 6), rnd() * (TILE - 3), 4, 1); }
+      }
+      if (kind === 'dirt' || kind === 'path') {
+        /* 沙纹：正弦起伏 + 碎石点 */
+        for (i = 0; i < 2; i++) {
+          g.strokeStyle = U.rgba(p.sp2, 0.5); g.lineWidth = 1;
+          g.beginPath();
+          var wy = 6 + i * 12 + rnd() * 4;
+          g.moveTo(0, wy);
+          for (var wx = 0; wx <= TILE; wx += 4) g.lineTo(wx, wy + Math.sin(wx * 0.35 + v) * 2);
+          g.stroke();
+        }
+        for (i = 0; i < 3; i++) { g.fillStyle = U.rgba(p.sp1, 0.7); g.fillRect(rnd() * (TILE - 3), rnd() * (TILE - 3), 2, 2); }
+      }
+      if (kind === 'water' || kind === 'marshw') {
+        /* 三色横带 + 三层高光波纹 + 波线 */
+        for (i = 0; i < 4; i++) {
+          var y2 = i * 8 + (v % 2) * 3;
+          g.fillStyle = [p.sp1, p.base, p.sp2][i % 3];
+          g.globalAlpha = 0.5;
+          g.fillRect(0, y2, TILE, 8);
+          g.globalAlpha = 1;
+        }
+        for (i = 0; i < 3; i++) {
+          var hx = rnd() * (TILE - 10), hy = 4 + rnd() * (TILE - 10);
+          g.fillStyle = 'rgba(255,255,255,0.30)'; g.fillRect(hx, hy, 7, 2);
+          g.fillStyle = 'rgba(255,255,255,0.20)'; g.fillRect(hx + 2, hy - 2, 4, 1);
+        }
+        g.strokeStyle = 'rgba(255,255,255,0.14)'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(2, 14 + (v % 3) * 5); g.lineTo(14, 13 + (v % 3) * 5); g.stroke();
+      }
+      if (kind === 'lava') {
+        /* 亮斑 + 暗流裂纹 */
+        for (i = 0; i < 3; i++) {
+          g.fillStyle = U.rgba(p.sp1, 0.8);
+          g.fillRect(rnd() * (TILE - 6), rnd() * (TILE - 4), 5, 2);
+        }
+        g.strokeStyle = U.rgba(p.sp2, 0.75); g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(4, 2); g.lineTo(10, 10); g.lineTo(8, 20); g.lineTo(16, 26); g.lineTo(24, 15);
+        g.stroke();
+        g.fillStyle = 'rgba(255,220,120,0.6)'; g.fillRect(6 + v * 2, 24, 4, 2);
       }
       if (kind === 'rock' || kind === 'cavew') {
         g.strokeStyle = p.sp2; g.lineWidth = 2;
         g.beginPath();
         g.moveTo(4, 2); g.lineTo(10, 10); g.lineTo(8, 20); g.lineTo(16, 24); g.lineTo(22, 14);
         g.stroke();
+        g.fillStyle = p.sp1;
+        g.fillRect(6 + rnd() * 8, 8 + rnd() * 10, 3, 2);
       }
       if (kind === 'rock' || kind === 'cavew' || kind === 'stone') {
         g.fillStyle = 'rgba(0,0,0,0.22)'; g.fillRect(0, TILE - 4, TILE, 4);
         g.fillStyle = 'rgba(255,255,255,0.10)'; g.fillRect(0, 0, TILE, 3);
       }
+      if (kind === 'snow') {
+        /* 雪面：平整底 + 冰晶亮点 + 蓝影斑 + 波痕（细节振幅拉大） */
+        for (i = 0; i < 4; i++) {
+          g.fillStyle = U.rgba(p.sp1, 0.95);
+          g.fillRect(rnd() * (TILE - 3), rnd() * (TILE - 3), 2, 1);
+        }
+        if (rnd() < 0.6) {
+          g.fillStyle = U.rgba(p.sp2, 0.55);
+          g.beginPath(); g.ellipse(rnd() * TILE, rnd() * TILE, 7, 4, rnd() * 3, 0, 6.28); g.fill();
+        }
+        g.strokeStyle = U.rgba(p.sp2, 0.8); g.lineWidth = 1;
+        g.beginPath();
+        var sy2 = 8 + (v % 3) * 7;
+        g.moveTo(0, sy2); g.bezierCurveTo(8, sy2 - 3, 20, sy2 + 3, TILE, sy2);
+        g.stroke();
+        if (rnd() < 0.35) { g.fillStyle = '#e8f8ff'; g.fillRect(rnd() * (TILE - 4) + 1, rnd() * (TILE - 4) + 1, 2, 2); }
+      }
+      if (kind === 'abyss') {
+        /* 归墟虚壤：深紫底 + 星屑 + 裂纹微光 */
+        for (i = 0; i < 3; i++) {
+          g.fillStyle = rnd() < 0.5 ? '#8a7ad0' : '#b0a0e8';
+          g.globalAlpha = 0.7;
+          g.fillRect(rnd() * (TILE - 2), rnd() * (TILE - 2), 1, 1);
+          g.globalAlpha = 1;
+        }
+        if (rnd() < 0.4) {
+          g.strokeStyle = U.rgba('#6a5ab0', 0.6); g.lineWidth = 1;
+          g.beginPath();
+          g.moveTo(rnd() * TILE * 0.5, rnd() * TILE);
+          g.lineTo(TILE * 0.6 + rnd() * TILE * 0.4, rnd() * TILE);
+          g.stroke();
+        }
+      }
+      if (kind === 'wood') {
+        /* 木板缝 + 钉点 */
+        g.strokeStyle = 'rgba(0,0,0,0.20)'; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(0, 10 + (v % 2) * 6); g.lineTo(TILE, 10 + (v % 2) * 6);
+        g.moveTo(0, 22 - (v % 2) * 6); g.lineTo(TILE, 22 - (v % 2) * 6); g.stroke();
+        g.fillStyle = 'rgba(0,0,0,0.3)';
+        g.fillRect(4, 4 + (v % 2) * 6, 2, 2); g.fillRect(TILE - 6, 18 - (v % 2) * 6, 2, 2);
+      }
+      /* 通用细噪（少量，保持底色纯净） */
+      for (i = 0; i < 8; i++) {
+        speck = rnd();
+        g.fillStyle = speck > 0.55 ? p.sp1 : p.sp2;
+        g.globalAlpha = 0.5;
+        g.fillRect(Math.floor(rnd() * TILE), Math.floor(rnd() * TILE), 2, 2);
+      }
+      g.globalAlpha = 1;
     });
   }
 
@@ -582,13 +767,72 @@ var Sprites = (function () {
       for (y2 = 0; y2 < 12; y2++) gr.rect(5 + Math.floor((11 - y2) * 1.0), 2 + y2, 22 - Math.floor((11 - y2) * 2.0), 1, y2 % 2 ? '#4c6480' : '#3c5268');
       gr.rect(14, 24, 4, 14, '#4c3828');
       gr.rect(10, 18, 3, 3, '#f0e0a0'); gr.rect(19, 18, 3, 3, '#f0e0a0');
-    } else if (kind === 'stall') {
+        } else if (kind === 'stall') {
       var xx;
       gr.rect(6, 24, 20, 14, '#8a6a42');
       for (xx = 0; xx < 6; xx++) gr.rect(6 + xx * 4, 24, 2, 14, xx % 2 ? '#a05838' : '#c8a040');
       gr.rect(4, 18, 24, 5, '#c05838'); gr.rect(4, 18, 24, 2, '#d87048');
+    } else if (kind === 'snowpine') {
+      var s1;
+      gr.rect(15, 27, 3, 11, '#4c3a24');
+      for (s1 = 0; s1 < 4; s1++) {
+        var sy = 27 - s1 * 6, sw = 10 - s1 * 2;
+        gr.rect(16 - sw, sy - 5, sw * 2, 5, s1 % 2 ? '#2c5c50' : '#356e60');
+        gr.rect(16 - sw + 1, sy - 5, sw * 2 - 2, 2, '#e8eef4');   /* 压雪 */
+      }
+      gr.px(16, 1, '#e8eef4');
+    } else if (kind === 'icecrystal') {
+      gr.line(16, 38, 16, 22, '#9fd8e8');
+      gr.line(16, 32, 11, 26, '#9fd8e8'); gr.line(16, 34, 21, 27, '#b8e8f4');
+      gr.px(16, 21, '#e0f8ff'); gr.px(11, 25, '#e0f8ff');
+      gr.ell(16, 38, 5, 2, U.shade('#9fd8e8', -0.2));
+    } else if (kind === 'snowrock') {
+      gr.ell(16, 31, 9, 6, '#8a94a2'); gr.ell(13, 29, 5, 3, '#a4b0bc');
+      gr.rect(8, 30, 16, 2, U.shade('#8a94a2', -0.18));
+      gr.ell(14, 26, 6, 2, '#e8eef4');
+    } else if (kind === 'campfire') {
+      gr.ell(16, 36, 7, 3, '#5a4432');
+      gr.line(11, 36, 21, 33, '#6c503a'); gr.line(21, 36, 11, 33, '#6c503a');
+      gr.ell(16, 30, 4, 5, '#ff8830'); gr.ell(16, 28, 2.4, 3, '#ffd868'); gr.px(16, 25, '#fff0c0');
+    } else if (kind === 'peachtree') {
+      /* 桃树：弯干虬枝 + 团簇粉冠 + 点点花瓣 */
+      gr.rect(15, 22, 3, 7, '#6a4630');
+      gr.rect(16, 29, 3, 8, '#5c3c28');          /* 主干微弯 */
+      gr.line(16, 28, 9, 21, '#6a4630'); gr.line(17, 26, 24, 19, '#6a4630');
+      gr.line(9, 21, 5, 17, '#5c3c28'); gr.line(24, 19, 28, 14, '#5c3c28');   /* 二级分叉 */
+      gr.line(16, 27, 12, 22, '#6a4630'); gr.line(17, 25, 22, 21, '#6a4630');
+      gr.ell(16, 12, 11, 8, '#e8a0b8'); gr.ell(11, 10, 6, 5, '#f2c0d0'); gr.ell(22, 13, 6, 5, '#d888a8');
+      gr.ell(5, 14, 4, 3, '#d888a8'); gr.ell(27, 11, 4, 3, '#f2c0d0');        /* 枝头花团 */
+      gr.px(10, 9, '#fae0e8'); gr.px(18, 12, '#fae0e8'); gr.px(14, 15, '#fff0f4'); gr.px(6, 12, '#fae0e8');
+    } else if (kind === 'stela') {
+      /* 山海遗刻：石碑 + 刻纹 */
+      gr.rect(10, 14, 12, 24, '#7c7468');
+      gr.rect(9, 12, 14, 4, '#8c8478');
+      gr.rect(12, 18, 8, 1, '#b0a898'); gr.rect(12, 21, 6, 1, '#b0a898'); gr.rect(12, 24, 8, 1, '#b0a898'); gr.rect(12, 27, 5, 1, '#b0a898');
+      gr.ell(16, 38, 8, 2, '#5c564c');
+      gr.px(9, 13, '#a8a094'); gr.px(22, 15, '#a8a094');
+    } else if (kind === 'deadwood') {
+      /* 荒漠枯木 */
+      gr.rect(15, 16, 3, 22, '#9c8868');
+      gr.line(16, 22, 8, 15, '#9c8868'); gr.line(17, 20, 25, 12, '#9c8868');
+      gr.line(8, 15, 5, 10, '#8a7858'); gr.line(25, 12, 28, 7, '#8a7858');
+      gr.px(6, 9, '#8a7858'); gr.px(28, 6, '#8a7858');
+    } else if (kind === 'cactus') {
+      gr.rect(14, 16, 4, 20, '#5a9050');
+      gr.rect(9, 20, 3, 8, '#5a9050'); gr.rect(9, 20, 6, 3, '#5a9050');
+      gr.rect(20, 18, 3, 10, '#5a9050'); gr.rect(17, 18, 6, 3, '#5a9050');
+      gr.px(16, 16, '#6ca860'); gr.px(10, 19, '#6ca860'); gr.px(22, 17, '#6ca860');
+      gr.px(15, 14, '#e87898'); gr.px(17, 15, '#e87898');
+    } else if (kind === 'voidshard') {
+      /* 归墟浮晶：悬浮的裂隙晶体 */
+      gr.line(16, 38, 16, 24, '#7a68c8');
+      gr.line(16, 32, 10, 27, '#7a68c8'); gr.line(16, 30, 22, 26, '#9888e0');
+      gr.px(16, 23, '#d0c8ff'); gr.px(10, 26, '#d0c8ff'); gr.px(22, 25, '#d0c8ff');
+      gr.ell(16, 38, 5, 2, U.shade('#7a68c8', -0.25));
+      gr.px(15, 20, '#fff');      /* 顶端星芒 */
     }
-    gr.celShade();
+    gr.lightRamp(0.8);
+    gr.topLight();
     gr.outline(OUT);
     return gr;
   }

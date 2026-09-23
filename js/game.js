@@ -12,6 +12,8 @@ var Game = {
   map: null, mapCache: {},
   cam: { x: 0, y: 0 },
   shakeT: 0, shakeAmp: 0, flashT: 0, flashC: '',
+  hurtFlash: 0,                                 /* 玩家受击红闪（独立通道，边缘径向红） */
+  hitStopT: 0,                                  /* 顿帧：受击时全局时间减速 */
   time: 0, lastT: 0,
   sched: [],
   petMode: 'attack',
@@ -24,7 +26,7 @@ var Game = {
   bossState: {},                  /* {mapId: {alive, t}} */
   event: null, eventCd: 50,
   caravanNpc: null,
-  stats: { statCatch: 0, statBossKill: 0, killedDijiang: false, statPlus6: 0 },
+  stats: { statCatch: 0, statBossKill: 0, killedDijiang: false, killedQiongqi: false, killedZhulong: false, statPlus6: 0 },
   achv: {},
   playTime: 0,
   interactHint: '',
@@ -44,13 +46,18 @@ var Game = {
     this.quests = { m1: { p: 0 } }; this.questsDone = {};
     this.flags = {}; this.visited = {};
     this.bossState = {};
-    this.stats = { statCatch: 0, statBossKill: 0, killedDijiang: false, statPlus6: 0 };
+    this.stats = { statCatch: 0, statBossKill: 0, killedDijiang: false, killedQiongqi: false, killedZhulong: false, statPlus6: 0 };
     this.achv = {};
     this.petMode = 'attack';
     this.playTime = 0;
     this.event = null; this.eventCd = 55;
     this.caravanNpc = null;
-    UI.toast('欢迎来到山海世界！按 F 与村民对话，WASD 移动。');
+    /* 序章过场（重开新档播一次；继续旅程不再播） */
+    var self = this;
+    UI.prologue(function () {
+      UI.toast('欢迎来到山海世界！按 F 与村民对话，WASD 移动。');
+      UI.toast('主线委托在村长·姜石处（头顶 ! 标记）');
+    });
     this.gotoMap('village', 20, 17);
     this.save();
   },
@@ -105,6 +112,31 @@ var Game = {
       var pet = new PetActor(rec, i);
       pet.x = P.x + U.rand(-40, 40); pet.y = P.y + U.rand(-30, 30);
       this.pets.push(pet);
+    }
+    this.checkResonance();
+  },
+
+  /* ===================== 元素共鸣：三只出战灵物属性互异 → 全员 +8% 攻击 ===================== */
+  checkResonance: function () {
+    var pets = this.pets;
+    var had = this.resonance || false;
+    this.resonance = pets.length === 3 && (function () {
+      var els = pets.map(function (p) { return p.sp.el; });
+      return els[0] !== els[1] && els[0] !== els[2] && els[1] !== els[2];
+    })();
+    if (this.resonance) {
+      pets.forEach(function (p) { p.st.atk = Math.round(p.st.atk * 1.08 * 10) / 10; });
+      this.player.gainBuff('元素共鸣', { atk: 0.08 }, Infinity);
+      if (!had) {
+        this.toast('✦ 元素共鸣发动：三属性交汇，全员攻击 +8%');
+        this.addFx({ type: 'ring', x: this.player.x, y: this.player.y, r: 10, maxR: 70, t: 0.5, dur: 0.5, color: '#e8c8ff' });
+        this.stats.resonance = true;
+        this.checkAchv();
+      }
+    } else if (had) {
+      /* 阵容打散：撤 buff（recalc 回落） */
+      this.player.buffs = this.player.buffs.filter(function (b) { return b.id !== '元素共鸣'; });
+      this.player.recalc();
     }
   },
   spiritByUid: function (uid) {
@@ -206,7 +238,7 @@ var Game = {
     }
   },
   startEvent: function () {
-    var type = U.weighted([['migration', 3], ['frenzy', 2], ['caravan', 3]]);
+    var type = U.weighted([['migration', 3], ['frenzy', 2], ['caravan', 3], ['treasure', 2]]);
     var self = this;
     if (type === 'migration') {
       this.event = { type: type, t: 40 };
@@ -227,6 +259,31 @@ var Game = {
       this.event = { type: type, t: 25 };
       this.toast('⚠ 兽潮涌动：全图灵物躁动来袭！（25 秒）');
       SFX.play('boss');
+    } else if (type === 'treasure') {
+      /* 藏宝现世：玩家附近散落宝堆（金币/素材/少量装备），45 秒后沉没 */
+      this.event = { type: type, t: 45 };
+      this.toast('💰 藏宝现世：附近散落了上古遗藏（45 秒后沉没）');
+      SFX.play('coin');
+      for (var ti = 0; ti < 6; ti++) {
+        var tang = Math.random() * 6.28, td = U.rand(60, 260);
+        var tx4 = U.clamp(this.player.x + Math.cos(tang) * td, 60, this.map.w * TILE - 60);
+        var ty4 = U.clamp(this.player.y + Math.sin(tang) * td, 60, this.map.h * TILE - 60);
+        var ft4 = this.map.nearestFreeTile(tx4 / TILE, ty4 / TILE);
+        var payload;
+        if (ti === 0) {
+          var pool = equipDropPool(this.player.lv);
+          payload = { equip: { id: U.choice(pool), plus: 0 } };
+        } else if (ti < 3) {
+          payload = { gold: Math.round((30 + this.player.lv * 12) * U.rand(0.8, 1.4)) };
+        } else {
+          var tt2 = MAT_DROPS[this.map.def.theme] || MAT_DROPS.grass;
+          payload = { item: [U.choice(tt2.map(function (r) { return r[0]; })), 2] };
+        }
+        var pk = new Pickup(ft4.x * TILE + 16, ft4.y * TILE + 16, payload);
+        pk.t = 45;                              /* 与事件同步消失 */
+        this.pickups.push(pk);
+        this.addFx({ type: 'ring', x: pk.x, y: pk.y, r: 6, maxR: 34, t: 0.6, dur: 0.6, color: '#ffd740' });
+      }
     } else {
       this.event = { type: type, t: 45 };
       this.toast('🛒 行脚商队路过：出现了稀有货摊（45 秒）');
@@ -284,6 +341,8 @@ var Game = {
     Input.endFrame();
   },
   update: function (dt) {
+    /* 顿帧：全局时间减速到 14%（不完全冻结，对齐 demo 手法） */
+    if (this.hitStopT > 0) { this.hitStopT -= dt; dt *= 0.14; }
     this.playTime += dt;
     var P = this.player;
     P.update(dt);
@@ -318,6 +377,7 @@ var Game = {
     this.cam.y = U.clamp(U.lerp(this.cam.y, tyy, Math.min(1, dt * 8)), 0, this.map.h * TILE - this.H);
     if (this.shakeT > 0) this.shakeT -= dt;
     if (this.flashT > 0) this.flashT -= dt;
+    if (this.hurtFlash > 0) this.hurtFlash -= dt;
     this.updateAchv();
   },
   camSnap: function () {
@@ -325,6 +385,7 @@ var Game = {
     this.cam.y = U.clamp(this.player.y - this.H / 2, 0, this.map.h * TILE - this.H);
   },
   shake: function (amp) { this.shakeT = 0.25; this.shakeAmp = amp; },
+  pulseHit: function (dmg) { this.hitStopT = Math.max(this.hitStopT, Math.min(0.055, 0.020 + dmg * 0.0006)); },
   flash: function (c) { this.flashT = 0.3; this.flashC = c; },
   schedule: function (t, fn) { this.sched.push({ t: t, fn: fn }); },
 
@@ -338,6 +399,10 @@ var Game = {
     (this.map.def.npcs || []).forEach(function (n) {
       var d = U.dist2(P.x, P.y, n.x * TILE + 16, n.y * TILE + 16);
       if (d < bd) { bd = d; best = { type: 'npc', n: n }; }
+    });
+    (this.map.stelae || []).forEach(function (st) {
+      var d = U.dist2(P.x, P.y, st.x * TILE + 16, st.y * TILE + 16);
+      if (d < bd) { bd = d; best = { type: 'stela', st: st }; }
     });
     if (this.caravanNpc) {
       var d2 = U.dist2(P.x, P.y, this.caravanNpc.x, this.caravanNpc.y);
@@ -354,6 +419,10 @@ var Game = {
       else this.interactHint = '按 F 前往 ' + it.p.label;
     } else if (it.type === 'npc') {
       this.interactHint = '按 F 与 ' + it.n.name + ' 对话';
+    } else if (it.type === 'stela') {
+      this.interactHint = this.flags.stelaeFound && this.flags.stelaeFound[it.st.def.id]
+        ? it.st.def.name + '（已读过）'
+        : '按 F 读取「' + it.st.def.name + '」';
     } else {
       this.interactHint = '按 F 逛逛行脚商队';
     }
@@ -412,9 +481,35 @@ var Game = {
       this.gotoMap(p.to, back.tx, back.ty);
     } else if (it.type === 'npc') {
       UI.talk(it.n.id);
+    } else if (it.type === 'stela') {
+      this.readStela(it.st);
     } else {
       UI.openCaravan();
     }
+  },
+
+  /* ===================== 山海遗刻 ===================== */
+  stelaeCount: function () { return this.flags.stelaeFound ? Object.keys(this.flags.stelaeFound).length : 0; },
+  readStela: function (st) {
+    if (!this.flags.stelaeFound) this.flags.stelaeFound = {};
+    if (this.flags.stelaeFound[st.def.id]) { UI.showStela(st.def, true); return; }
+    this.flags.stelaeFound[st.def.id] = 1;
+    SFX.play('levelup');
+    Game.addFx({ type: 'ring', x: st.x * TILE + 16, y: st.y * TILE + 16, r: 10, maxR: 60, t: 0.6, dur: 0.6, color: '#ffd740' });
+    this.questEvent('stelae', {});
+    UI.showStela(st.def, false);
+    var n = this.stelaeCount();
+    if (n === STELAE.length) {
+      this.toast('山海遗刻全部寻得！上古拾灵人的手记，如今由你续写。');
+      this.flags.stelaeAll = 1;
+      this.player.gold += 1000;
+      this.addFloat(this.player.x, this.player.y - 50, '+1000 金（遗刻完璧）', '#ffd740', 14);
+      /* 先杀烛龙后补碑：此刻补触发真结局判定 */
+      if (this.stats.killedZhulong && !this.flags.trueEnding) this.victory();
+    } else {
+      this.toast('遗刻 ' + n + '/' + STELAE.length + '：「' + st.def.name + '」已录入图经');
+    }
+    this.save();
   },
 
   /* ===================== 拾取 ===================== */
@@ -478,6 +573,10 @@ var Game = {
         }
       } else if (g.type === 'capture' && type === 'capture') {
         if (g.any || g.sp === data.sp) st.p++;
+      } else if (g.type === 'shinyCapture' && type === 'capture') {
+        if (data.shiny) st.p++;
+      } else if (g.type === 'stelae' && type === 'stelae') {
+        st.p = self.stelaeCount();
       } else if (g.type === 'captureOne' && type === 'capture') {
         if (g.sp.indexOf(data.sp) >= 0) st.p++;
       } else if (g.type === 'boss' && type === 'boss') {
@@ -495,6 +594,8 @@ var Game = {
     var g = q.goal;
     if (g.type === 'item') return (this.bag[g.item] || 0) >= g.n;
     if (g.type === 'dex') return this.dexCaughtCount() >= g.n;
+    if (g.type === 'stelae') return this.stelaeCount() >= g.n;
+    if (g.type === 'shinyCapture') return st.p >= g.n;
     return st.p >= g.n;
   },
   turnInQuest: function (qid) {
@@ -522,7 +623,12 @@ var Game = {
     this.questsDone[qid] = 1;
     delete this.quests[qid];
     SFX.play('levelup');
-    this.toast('完成委托【' + q.name + '】！');
+    /* 主线后日谈：交付后弹过场对话 */
+    if (q.after) {
+      UI.afterDialog(q);
+    } else {
+      this.toast('完成委托【' + q.name + '】！');
+    }
     /* 主线链：激活下一条 */
     if (q.main) {
       var next = QUESTS.filter(function (x) { return x.prev === qid; })[0];
@@ -536,8 +642,12 @@ var Game = {
   },
   acceptQuest: function (qid) {
     if (this.quests[qid]) return false;
-    this.quests[qid] = { p: 0 };
     var q = QUESTS.filter(function (x) { return x.id === qid; })[0];
+    var p0 = 0;
+    if (q.goal.type === 'stelae') p0 = this.stelaeCount();
+    /* 单杀型 BOSS 委托：先杀后接不卡进度（重杀型 h3 语义不变） */
+    if (q.goal.type === 'boss' && q.goal.n === 1 && this.flags['boss_' + q.goal.map]) p0 = 1;
+    this.quests[qid] = { p: p0 };
     this.toast('接受委托【' + q.name + '】');
     return true;
   },
@@ -557,6 +667,14 @@ var Game = {
         this.stats.killedDijiang = true;
         this.victory();
       }
+      if (mob.spId === 'qiongqi' && !this.stats.killedQiongqi) {
+        this.stats.killedQiongqi = true;
+        this.toast('风雪止息。北冥的传说落下帷幕。');
+      }
+      if (mob.spId === 'zhulong' && !this.stats.killedZhulong) {
+        this.stats.killedZhulong = true;
+        this.victory();
+      }
       this.shake(10);
       this.flash('rgba(255,220,120,0.25)');
     } else {
@@ -572,7 +690,13 @@ var Game = {
     var self = this;
     SFX.play('levelup');
     this.flags.victory = 1;
-    UI.showEnding();
+    /* 真结局：烛龙倒下 + 八块遗刻寻得 */
+    if (this.stats.killedZhulong && this.stelaeCount() >= STELAE.length) {
+      this.flags.trueEnding = 1;
+      UI.showTrueEnding();
+    } else {
+      UI.showEnding();
+    }
   },
   playerDown: function () {
     var self = this;
@@ -610,6 +734,10 @@ var Game = {
         dexCaught: self.dexCaughtCount(),
         statBossKill: self.stats.statBossKill,
         killedDijiang: self.stats.killedDijiang,
+        killedQiongqi: self.stats.killedQiongqi,
+        killedZhulong: self.stats.killedZhulong,
+        stelaeAll: self.flags.stelaeAll || self.stelaeCount() >= STELAE.length,
+        resonance: self.stats.resonance,
         statPlus6: self.stats.statPlus6,
         lv: self.player.lv,
         gold: self.player.gold
@@ -700,7 +828,7 @@ var Game = {
 
   /* ===================== 反馈工具 ===================== */
   addFloat: function (x, y, text, color, size) { this.floats.push(new FloatText(x, y, text, color, size)); },
-  addFx: function (o) { this.fx.push(new Effect(o)); },
+  addFx: function (o) { if (this.fx.length < 110) this.fx.push(new Effect(o)); },
   toast: function (text) { UI.toast(text); },
   nudge: function (x, y, text) {
     /* 高频小提示：1.2 秒内同文本去重 */
@@ -720,8 +848,9 @@ var Game = {
 
     var shx = 0, shy = 0;
     if (this.shakeT > 0) {
-      shx = Math.sin(this.time * 70) * this.shakeAmp * this.shakeT / 0.25;
-      shy = Math.cos(this.time * 63) * this.shakeAmp * this.shakeT / 0.25;
+      /* 连续正弦振荡（对齐 demo：freq 46 / 46*0.83，线性衰减包络） */
+      shx = Math.sin(this.time * 46) * this.shakeAmp * 0.8 * this.shakeT / 0.25;
+      shy = Math.cos(this.time * 38) * this.shakeAmp * 0.6 * this.shakeT / 0.25;
     }
     var cam = { x: Math.round(this.cam.x + shx), y: Math.round(this.cam.y + shy) };
     this.rcam = cam;
@@ -804,7 +933,7 @@ var Game = {
     if (this.map.def.dark) {
       var lg = this.lightCv.getContext('2d');
       lg.clearRect(0, 0, this.W, this.H);
-      lg.fillStyle = 'rgba(8,6,18,0.74)';
+      lg.fillStyle = 'rgba(8,6,18,0.46)';
       lg.fillRect(0, 0, this.W, this.H);
       function hole(x, y, r) {
         var grad = lg.createRadialGradient(x - cam.x, y - cam.y, r * 0.2, x - cam.x, y - cam.y, r);
@@ -815,11 +944,14 @@ var Game = {
         lg.beginPath(); lg.arc(x - cam.x, y - cam.y, r, 0, 6.28); lg.fill();
         lg.globalCompositeOperation = 'source-over';
       }
-      hole(this.player.x, this.player.y, 300);
+      hole(this.player.x, this.player.y, 330);
       this.map.lights.forEach(function (L) { hole(L.x, L.y, L.r); });
-      this.mobs.forEach(function (m) { if (m.alive) hole(m.x, m.y, 60); });
+      this.mobs.forEach(function (m) { if (m.alive) hole(m.x, m.y, 70); });
       g.drawImage(this.lightCv, 0, 0);
     }
+
+    /* 5.5 环境氛围：主题色罩 + 环境粒子 + 暗角 */
+    this.drawAmbient(g);
 
     /* 6. 屏闪 */
     if (this.flashT > 0) {
@@ -835,6 +967,16 @@ var Game = {
       g.strokeStyle = 'rgba(220,50,40,' + (0.35 + Math.sin(this.time * 6) * 0.2) + ')';
       g.lineWidth = 24;
       g.strokeRect(0, 0, this.W, this.H);
+    }
+
+    /* 7.5 玩家受击红闪：边缘径向红 vignette（demo 手法，独立于 flashC） */
+    if (this.hurtFlash > 0) {
+      var hf = U.clamp(this.hurtFlash / 0.35, 0, 1);
+      var hg = g.createRadialGradient(this.W / 2, this.H / 2, this.H * 0.34, this.W / 2, this.H / 2, this.H * 0.85);
+      hg.addColorStop(0, 'rgba(200,16,16,0)');
+      hg.addColorStop(1, 'rgba(200,16,16,' + (0.55 * hf).toFixed(2) + ')');
+      g.fillStyle = hg;
+      g.fillRect(0, 0, this.W, this.H);
     }
 
     /* 8. 小地图（右下角，避开右上角的委托追踪/BOSS 倒计时） */
@@ -883,5 +1025,70 @@ var Game = {
       g.fillStyle = 'rgba(255,220,140,0.9)';
       g.fillText('E 捕捉', cxx, cyy);
     }
+  },
+
+  /* ===================== 环境氛围层 =====================
+     主题色罩 + 环境粒子（雪落/火星/萤浮）+ 常驻暗角。
+     粒子为纯时间函数（无状态），不参与 update。 */
+  drawAmbient: function (g) {
+    var amb = THEME_AMBIENT[this.map.def.theme];
+    if (!amb) return;
+    if (amb.tint) {
+      g.fillStyle = amb.tint;
+      g.fillRect(0, 0, this.W, this.H);
+    }
+    var dust = amb.dust;
+    if (dust) {
+      var theme = this.map.def.theme;
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      for (var i = 0; i < dust[1]; i++) {
+        var seed = i * 137.51;
+        var baseX = (Math.sin(seed) * 0.5 + 0.5) * this.W;
+        var baseY = (Math.sin(seed * 1.7) * 0.5 + 0.5) * this.H;
+        var px, py, sz, al;
+        if (theme === 'snow') {
+          /* 雪：斜落 + 风摆 */
+          var fall = (this.time * (34 + (i % 7) * 9) + seed * 5) % (this.H + 20) - 10;
+          px = baseX + Math.sin(this.time * 1.1 + i) * 26;
+          py = fall;
+          sz = 1.5 + (i % 3) * 0.8;
+          al = 0.5 + (i % 4) * 0.1;
+          g.fillStyle = '#ffffff';
+        } else if (theme === 'peach') {
+          /* 花瓣：慢速飘落 + 大幅风摆，粉白双色 */
+          var pfall = (this.time * (18 + (i % 5) * 6) + seed * 9) % (this.H + 24) - 12;
+          px = baseX + Math.sin(this.time * 0.9 + i * 1.3) * 40;
+          py = pfall;
+          sz = 2.5 + (i % 2);
+          al = 0.55 + (i % 3) * 0.12;
+          g.fillStyle = i % 3 === 0 ? '#fae0e8' : '#f2b0c8';
+        } else if (theme === 'volcano') {
+          /* 火星：上升 + 摇曳，1/3 金色 */
+          var rise = (this.time * (30 + (i % 5) * 10) + seed * 7) % (this.H + 30);
+          px = baseX + Math.sin(this.time * 2.2 + i * 1.9) * 14;
+          py = this.H - rise + 15;
+          sz = 1.5 + (i % 3);
+          al = 0.35 + (i % 3) * 0.12;
+          g.fillStyle = i % 3 === 0 ? '#ffd060' : '#ff8040';
+        } else {
+          /* 萤尘：缓慢漂浮 */
+          px = baseX + Math.cos(this.time * 0.6 + i * 1.7) * 16;
+          py = baseY + Math.sin(this.time * 0.8 + i * 2.3) * 20;
+          sz = 1.5;
+          al = 0.18 + Math.sin(this.time * 1.5 + i) * 0.08 + 0.1;
+          g.fillStyle = dust[0];
+        }
+        g.globalAlpha = al;
+        g.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+      }
+      g.restore();
+    }
+    /* 常驻暗角（色调随主题，避免黑框与主题色打架） */
+    var vg = g.createRadialGradient(this.W / 2, this.H / 2, this.H * 0.42, this.W / 2, this.H / 2, this.H * 0.94);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(1, 'rgba(' + (amb.vg || '0,0,0') + ',' + amb.darkV + ')');
+    g.fillStyle = vg;
+    g.fillRect(0, 0, this.W, this.H);
   }
 };

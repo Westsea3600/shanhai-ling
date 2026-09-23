@@ -68,8 +68,27 @@ var Battle = {
     if (ef > 1.1) col = '#ffd740';
     else if (ef < 0.9) col = '#9aa8b0';
     if (crit) col = '#ff8060';
-    Game.addFloat(target.x + U.rand(-8, 8), target.y - 30, (crit ? '✦' : '') + dmg, col, crit ? 16 : 13);
-    Game.addFx({ type: 'hit', x: target.x, y: target.y - 10, t: 0.25, el: atkEl });
+    Game.addFloat(target.x + U.rand(-8, 8), target.y - 30, (crit ? '✦' : '') + dmg, col, crit ? 18 : 13);
+    /* --- 命中反馈分级（对齐 demo）：普攻小飞溅；暴击叠元素爆裂+双冲击环 --- */
+    Game.addFx({ type: 'hit', x: target.x, y: target.y - 10, t: 0.28, dur: 0.28, el: atkEl });
+    if (crit) {
+      var ec = ELEMENTS[atkEl] ? ELEMENTS[atkEl].color : '#ffd740';
+      Game.addFx({ type: 'elemBurst', x: target.x, y: target.y - 10, t: 0.5, dur: 0.5, el: atkEl, n: 26, spread: 80 });
+      Game.addFx({ type: 'ring', x: target.x, y: target.y - 6, r: 8, maxR: 26, t: 0.32, dur: 0.32, color: ec });
+      Game.addFx({ type: 'ring', x: target.x, y: target.y - 6, r: 4, maxR: 16, t: 0.24, dur: 0.24, color: '#ffffff' });
+      Game.shake(4 + Math.min(2, dmg * 0.002));
+    }
+    /* 受击顿帧：只有怪物挨打才给（玩家挨打开 hitStop 太难受） */
+    if (target.kind === 'mob') Game.pulseHit(dmg);
+    /* 火系命中偶尔留焦痕地斑 */
+    if (atkEl === 'fire' && target.kind === 'mob' && U.chance(0.12)) {
+      Game.addFx({ type: 'decal', x: target.x, y: target.y + 6, t: 2.2, dur: 2.2, radius: 26 });
+    }
+    /* 玩家受击：独立红闪通道（不与 flashC 抢占，防 BOSS 阶段闪被顶掉） */
+    if (target.kind === 'player') {
+      Game.shake(Math.min(7, dmg / Math.max(1, target.st.hp) * 90));
+      Game.hurtFlash = Math.max(Game.hurtFlash || 0, 0.35);
+    }
     SFX.play(crit ? 'crit' : 'hit');
     if (opts.combo !== false && (sk.el && sk.el !== 'none')) this.checkCombo(caster, target, sk);
     /* 状态附加 */
@@ -104,8 +123,10 @@ var Battle = {
   },
   fireCombo: function (caster, target, cb) {
     SFX.play('combo');
-    Game.shake(4);
+    Game.shake(5);
+    Game.flash('rgba(255,180,255,0.14)');
     Game.addFloat(target.x, target.y - 52, '连携·' + cb.name + '！', '#ffb0e8', 16);
+    Game.addFx({ type: 'elemBurst', x: target.x, y: target.y - 10, t: 0.5, dur: 0.5, el: cb.id === 'superconduct' ? 'thunder' : 'fire', n: 26, spread: cb.radius * 0.7 });
     Game.addFx({ type: 'boom', x: target.x, y: target.y - 10, t: 0.4, dur: 0.4, radius: cb.radius, el: 'thunder' });
     var hitList = [];
     if (cb.chain) {
@@ -171,7 +192,12 @@ var Battle = {
     caster.walkT += 0.1;
     switch (sk.kind) {
       case 'melee': {
-        Game.addFx({ type: 'slash', x: caster.x + Math.cos(aim) * 20, y: caster.y - 6 + Math.sin(aim) * 20, t: 0.18, dur: 0.18, ang: aim, arc: sk.arc || 1.8, radius: sk.range || 46 });
+        /* 玩家侧大招感：三层弧 greatslash；怪仍是轻量 slash */
+        if (caster.kind === 'player') {
+          Game.addFx({ type: 'greatslash', x: caster.x + Math.cos(aim) * 14, y: caster.y - 8 + Math.sin(aim) * 14, t: 0.24, dur: 0.24, ang: aim, arc: sk.arc || 1.8, radius: sk.range || 46 });
+        } else {
+          Game.addFx({ type: 'slash', x: caster.x + Math.cos(aim) * 20, y: caster.y - 6 + Math.sin(aim) * 20, t: 0.18, dur: 0.18, ang: aim, arc: sk.arc || 1.8, radius: sk.range || 46 });
+        }
         SFX.play('swing');
         this.hitArc(caster, aim, sk.range || 46, sk.arc || 1.8, sk);
         break;
@@ -196,22 +222,24 @@ var Battle = {
           }
           cx2 = tx; cy2 = ty;
         }
+        Game.addFx({ type: 'elemBurst', x: cx2, y: cy2, t: 0.5, dur: 0.5, el: el, n: 30, spread: sk.radius * 0.9 });
         Game.addFx({ type: 'boom', x: cx2, y: cy2, t: 0.45, dur: 0.45, radius: sk.radius, el: el });
-        Game.shake(3);
+        Game.addFx({ type: 'ring', x: cx2, y: cy2, r: 10, maxR: sk.radius * 0.8, t: 0.4, dur: 0.4, color: ELEMENTS[el] ? ELEMENTS[el].color : '#ffd740' });
+        Game.shake(3 + Math.min(4, sk.radius * 0.02));
         SFX.play('boss');
         this.hitRadius(caster, cx2, cy2, sk.radius, sk);
         break;
       }
       case 'dash': {
-        /* 突进：位移 + 途经伤害 */
+        /* 突进：位移 + 残影 + 途经伤害 */
         var dx = Math.cos(aim), dy = Math.sin(aim);
-        var hitMobs = [];
         var steps = Math.ceil((sk.dash || 150) / 12);
         for (var s2 = 0; s2 < steps; s2++) {
           caster.x += dx * 12; caster.y += dy * 12;
           if (Game.map.hitAt(caster.x, caster.y, caster.r)) { caster.x -= dx * 12; caster.y -= dy * 12; break; }
+          if (s2 % 2 === 0) Game.addFx({ type: 'afterimage', x: caster.x, y: caster.y, t: 0.3, dur: 0.3, r: caster.r });
         }
-        Game.addFx({ type: 'slash', x: caster.x, y: caster.y - 8, t: 0.22, dur: 0.22, ang: aim, arc: 2.6, radius: sk.range || 50 });
+        Game.addFx({ type: 'greatslash', x: caster.x, y: caster.y - 8, t: 0.24, dur: 0.24, ang: aim, arc: 2.6, radius: sk.range || 50 });
         SFX.play('swing');
         this.hitArc(caster, aim, (sk.range || 50) + 20, 2.4, sk);
         break;
@@ -234,9 +262,12 @@ var Battle = {
           if (!nxt) break;
           hit.push(nxt); last = nxt;
         }
+        var prevPt = { x: caster.x, y: caster.y - 14 };
         for (var h2 = 0; h2 < hit.length; h2++) {
-          Game.addFx({ type: 'hit', x: hit[h2].x, y: hit[h2].y - 10, t: 0.3, el: 'thunder' });
+          Game.addFx({ type: 'bolt', x: hit[h2].x, y: hit[h2].y - 10, x0: prevPt.x, y0: prevPt.y, t: 0.3, dur: 0.3, el: 'thunder' });
+          Game.addFx({ type: 'hit', x: hit[h2].x, y: hit[h2].y - 10, t: 0.28, dur: 0.28, el: 'thunder' });
           this.applySkillHit(caster, hit[h2], sk, { noKnock: true });
+          prevPt = { x: hit[h2].x, y: hit[h2].y - 14 };
         }
         SFX.play('shot');
         break;
@@ -257,7 +288,9 @@ var Battle = {
             for (var q = 0; q < (sk.count || 4); q++) {
               var ax = txr + U.rand(-sk.radius, sk.radius) * 0.8;
               var ay = tyr + U.rand(-sk.radius, sk.radius) * 0.8;
+              Game.addFx({ type: 'meteor', x: ax, y: ay, t: 0.55, dur: 0.55, radius: 44 });
               Game.addFx({ type: 'boom', x: ax, y: ay, t: 0.35, dur: 0.35, radius: 44, el: el });
+              if (el === 'fire' && q === 0) Game.addFx({ type: 'decal', x: ax, y: ay + 4, t: 2.4, dur: 2.4, radius: 24 });
               Game.shake(2);
               self.hitRadius(caster, ax, ay, 46, sk, 0.8);
             }
@@ -489,6 +522,7 @@ var Battle = {
         pet.rec.lv++;
         pet.st = petStat(pet.rec);
         if (pet.rec.shiny) { pet.st.hp = Math.round(pet.st.hp * SHINY_MUL); pet.st.atk = Math.round(pet.st.atk * SHINY_MUL * 10) / 10; pet.st.def = Math.round(pet.st.def * SHINY_MUL * 10) / 10; }
+        if (Game.resonance) pet.st.atk = Math.round(pet.st.atk * 1.08 * 10) / 10;
         pet.hp = pet.st.hp;
         Game.addFloat(pet.x, pet.y - 46, pet.sp.name + ' Lv.' + pet.rec.lv, '#8fe08f', 15);
         Game.addFx({ type: 'levelup', x: pet.x, y: pet.y, t: 0.6, dur: 0.6 });
@@ -529,6 +563,7 @@ var Battle = {
     pet.sp = SPECIES[to];
     pet.st = petStat(pet.rec);
     if (pet.rec.shiny) { pet.st.hp = Math.round(pet.st.hp * SHINY_MUL); pet.st.atk = Math.round(pet.st.atk * SHINY_MUL * 10) / 10; pet.st.def = Math.round(pet.st.def * SHINY_MUL * 10) / 10; }
+    if (Game.resonance) pet.st.atk = Math.round(pet.st.atk * 1.08 * 10) / 10;
     pet.hp = pet.st.hp;
     pet.skills = petSkills(pet.rec);
     SFX.play('evolve');
@@ -600,7 +635,7 @@ var Battle = {
     Game.toast('成功收服 ' + SPECIES[mob.spId].name + '！（' + TEMPERS[rec.temper].name + '·资质 ' + rec.iv + '）');
     Game.stats.statCatch++;
     Game.dexCaughtUp(mob.spId);
-    Game.questEvent('capture', { sp: mob.spId });
+    Game.questEvent('capture', { sp: mob.spId, shiny: !!mob.shiny });
     Game.checkAchv();
     if (mob.shiny) Game.toast('✨ 闪光灵物！');
     Game.save();   /* 结契是重要资产，立刻落盘 */
@@ -626,7 +661,7 @@ var Battle = {
         Game.pickups.push(new Pickup(mob.x + U.rand(-20, 20), mob.y - 6, { item: [bd[b][0], bd[b][1]] }));
       }
       /* 首次掉唯一 */
-      var uniqueDrop = { bifang: 'bifang_ling', zheng: null, gudiao: null, dijiang: 'dijiang_he' }[mob.spId];
+      var uniqueDrop = { bifang: 'bifang_ling', zheng: null, gudiao: null, dijiang: 'dijiang_he', zhulong: 'zhulong_yan' }[mob.spId];
       if (uniqueDrop && !Game.flags['unique_' + uniqueDrop]) {
         Game.flags['unique_' + uniqueDrop] = 1;
         Game.pickups.push(new Pickup(mob.x, mob.y - 14, { equip: { id: uniqueDrop, plus: 0 } }));

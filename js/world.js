@@ -50,6 +50,22 @@ GameMap.prototype.generate = function () {
       if (v < 0.30) t = 'mw';
       else if (v > 0.82) t = 'r';
       else t = 'm';
+    } else if (theme === 'snow') {
+      if (v < 0.28) t = 'w';                  /* 冰湖 */
+      else if (v > 0.78) t = 'r';             /* 冰壁 */
+      else t = 'sn';
+    } else if (theme === 'peach') {
+      if (v < 0.16) t = 'w';
+      else if (v > 0.74) t = 'g2';            /* 密林（桃树） */
+      else t = 'pg';
+    } else if (theme === 'desert') {
+      if (v < 0.20) t = 'w';                  /* 绿洲水泽 */
+      else if (v > 0.80) t = 'r';             /* 风蚀岩 */
+      else t = 'sa';
+    } else if (theme === 'abyss') {
+      if (v < 0.18) t = 'w';                  /* 虚空之渊（不可渡） */
+      else if (v > 0.76) t = 'r';             /* 裂界岩 */
+      else t = 'ab';
     } else { /* village */
       t = 'wd';
     }
@@ -73,10 +89,10 @@ GameMap.prototype.generate = function () {
     this.t = src;
   }
 
-  /* ---- 3. 边界封闭 ---- */
+  /* 边界封闭 */
   for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
     if (x < 2 || y < 2 || x >= W - 2 || y >= H - 2) {
-      this.t[this.idx(x, y)] = (theme === 'cave') ? 'cw' : (theme === 'volcano') ? 'r' : 'k';
+      this.t[this.idx(x, y)] = (theme === 'cave') ? 'cw' : (theme === 'volcano' || theme === 'snow') ? 'r' : 'k';
     }
   }
 
@@ -126,6 +142,20 @@ GameMap.prototype.generate = function () {
   this.block = new Array(W * H);
   this.placeDeco(rnd);
 
+  /* ---- 7.5 山海遗刻：本图的古碑（不占格，交互层另算） ---- */
+  this.stelae = [];
+  if (typeof STELAE !== 'undefined') {
+    var mapId0 = this.id;
+    STELAE.forEach(function (st) {
+      if (st.map !== mapId0) return;
+      var ft = self.nearestFreeTile
+        ? self.nearestFreeTile(st.x, st.y)
+        : { x: st.x, y: st.y };
+      self.stelae.push({ def: st, x: ft.x, y: ft.y });
+      self.deco.push({ kind: 'stela', x: ft.x, y: ft.y });
+    });
+  }
+
   /* ---- 8. 孤岛兜底 ---- */
   this.connectPockets();
 };
@@ -150,12 +180,11 @@ GameMap.prototype.carve = function (a, b) {
   }
   carveCell(b.x, b.y);
 };
-/* 障碍瓦片 → 对应的地面瓦片（走廊挖穿用） */
 GameMap.prototype.floorOf = function (t) {
   switch (t) {
-    case 'w': return 'g';
+    case 'w': return this.def.theme === 'snow' ? 'sn' : this.def.theme === 'desert' ? 'sa' : this.def.theme === 'abyss' ? 'ab' : 'g';
     case 'l': return 's';
-    case 'r': return 'g';
+    case 'r': return this.def.theme === 'snow' ? 'sn' : this.def.theme === 'desert' ? 'sa' : this.def.theme === 'abyss' ? 'ab' : 'g';
     case 'k': return 'g';
     case 'cw': return 'cf';
     case 'g2': return 'g2';
@@ -228,6 +257,63 @@ GameMap.prototype.placeDeco = function (rnd) {
         put(k < 0.45 ? 'reed' : k < 0.8 ? 'mushroom' : 'boulder', x, y, k >= 0.8);
       }
     }
+  } else if (theme === 'snow') {
+    for (i = 0; i < this.w * this.h * 0.014; i++) {
+      x = 2 + Math.floor(rnd() * (this.w - 4)); y = 2 + Math.floor(rnd() * (this.h - 4));
+      if (walkable(x, y) && !nearKey(x, y, 3)) {
+        var sk = rnd();
+        put(sk < 0.5 ? 'snowpine' : sk < 0.72 ? 'icecrystal' : 'snowrock', x, y, sk < 0.5 || sk >= 0.72);
+      }
+    }
+    /* 冰湖边緣的冰晶点缀（不占格，避开关键点） */
+    for (i = 0; i < this.w * this.h * 0.006; i++) {
+      x = 2 + Math.floor(rnd() * (this.w - 4)); y = 2 + Math.floor(rnd() * (this.h - 4));
+      var tx2 = this.t[this.idx(x, y)];
+      if (tx2 === 'sn' && walkable(x, y) && !nearKey(x, y, 2) && rnd() < 0.5) put('icecrystal', x, y, false);
+    }
+  } else if (theme === 'peach') {
+    /* 密林地块放桃树，散地放花 */
+    for (var py = 2; py < this.h - 2; py++) for (var px2 = 2; px2 < this.w - 2; px2++) {
+      var pt = this.t[this.idx(px2, py)];
+      if ((pt === 'g2' && rnd() < 0.7) || (pt === 'pg' && rnd() < 0.045)) {
+        if (!this.block[this.idx(px2, py)] && !nearKey(px2, py, 3)) {
+          put('peachtree', px2, py, true);
+          if (pt === 'g2' && rnd() < 0.6) this.t[this.idx(px2, py)] = 'pg';
+        }
+      }
+    }
+    for (var i2 = 0; i2 < this.w * this.h * 0.012; i2++) {
+      var fx3 = 2 + Math.floor(rnd() * (this.w - 4)), fy3 = 2 + Math.floor(rnd() * (this.h - 4));
+      if (walkable(fx3, fy3) && !nearKey(fx3, fy3, 2)) put('flower', fx3, fy3, false);
+    }
+  } else if (theme === 'desert') {
+    for (var di = 0; di < this.w * this.h * 0.011; di++) {
+      var dx3 = 2 + Math.floor(rnd() * (this.w - 4)), dy3 = 2 + Math.floor(rnd() * (this.h - 4));
+      if (walkable(dx3, dy3) && !nearKey(dx3, dy3, 3)) {
+        var dk = rnd();
+        put(dk < 0.34 ? 'deadwood' : dk < 0.62 ? 'cactus' : 'boulder', dx3, dy3, true);
+      }
+    }
+    /* 绿洲边緣芦苇 */
+    for (di = 0; di < this.w * this.h * 0.005; di++) {
+      dx3 = 2 + Math.floor(rnd() * (this.w - 4)); dy3 = 2 + Math.floor(rnd() * (this.h - 4));
+      var dt2 = this.t[this.idx(dx3, dy3)];
+      if (dt2 === 'sa' && walkable(dx3, dy3) && rnd() < 0.5) put('reed', dx3, dy3, false);
+    }
+  } else if (theme === 'abyss') {
+    for (var ai = 0; ai < this.w * this.h * 0.012; ai++) {
+      var ax2 = 2 + Math.floor(rnd() * (this.w - 4)), ay2 = 2 + Math.floor(rnd() * (this.h - 4));
+      if (walkable(ax2, ay2) && !nearKey(ax2, ay2, 3)) {
+        var ak = rnd();
+        put(ak < 0.55 ? 'voidshard' : 'boulder', ax2, ay2, true);
+      }
+    }
+    /* 归墟光源：浮晶自带幽光 */
+    this.deco.forEach(function (dc) {
+      if (dc.kind === 'voidshard' && rnd() < 0.35) {
+        self.lights.push({ x: dc.x * TILE + 16, y: dc.y * TILE + 16, r: 100 });
+      }
+    });
   } else if (theme === 'village') {
     /* 村庄：商店摊位、房子、装饰 */
     put('stall', 14, 20, true); put('house', 28, 20, true); put('house2', 20, 15, true);
@@ -386,7 +472,7 @@ GameMap.prototype.findPath = function (sx, sy, gx, gy) {
 var TILE_VIS = {
   g: 'grass', g2: 'grass', p: 'path', w: 'water', l: 'lava',
   r: 'rock', k: 'rock', s: 'stone', cf: 'cavef', cw: 'cavew',
-  m: 'marsh', mw: 'marshw', wd: 'wood', sn: 'snow'
+  m: 'marsh', mw: 'marshw', wd: 'wood', sn: 'snow', pg: 'peach', sa: 'sand', ab: 'abyss'
 };
 GameMap.prototype.bake = function () {
   var W = this.w, H = this.h;
@@ -410,12 +496,49 @@ GameMap.prototype.bake = function () {
       }
     }
   }
+  /* ---- 边缘光影第二遍：低洼暗、高耸投影（对齐 demo bake 手法） ---- */
+  var LOW = { w: 1, l: 1, mw: 1 };                    /* 低洼地形 */
+  var HIGH = { r: 1, k: 1, cw: 1 };                   /* 高耸障碍 */
+  for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+    var tt = this.t[this.idx(x, y)];
+    var up2 = y > 0 ? this.t[this.idx(x, y - 1)] : tt;
+    var dn2 = y < H - 1 ? this.t[this.idx(x, y + 1)] : tt;
+    if (LOW[tt]) {
+      /* 低洼顶部的岸沿阴影 + 底部受光 */
+      if (!LOW[up2] && !HIGH[up2]) {
+        g.fillStyle = 'rgba(0,0,0,0.35)'; g.fillRect(x * TILE, y * TILE, TILE, 5);
+        g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(x * TILE, y * TILE + 5, TILE, 4);
+      }
+      if (!LOW[dn2] && !HIGH[dn2]) {
+        g.fillStyle = tt === 'l' ? 'rgba(255,140,60,0.22)' : 'rgba(220,240,255,0.18)';
+        g.fillRect(x * TILE, y * TILE + TILE - 4, TILE, 4);
+      }
+    } else if (HIGH[tt]) {
+      /* 高障碍：自身顶部受光；脚下地面投影 */
+      if (!HIGH[up2]) {
+        g.fillStyle = 'rgba(255,255,255,0.13)'; g.fillRect(x * TILE, y * TILE, TILE, 3);
+      }
+      if (!HIGH[dn2] && !LOW[dn2]) {
+        g.fillStyle = 'rgba(0,0,0,0.30)'; g.fillRect(x * TILE, (y + 1) * TILE, TILE, 7);
+        g.fillStyle = 'rgba(0,0,0,0.18)'; g.fillRect(x * TILE, (y + 1) * TILE + 7, TILE, 6);
+      }
+    }
+  }
+  /* 冰湖：水面格铺冷色，与普通水区分 */
+  if (this.def.theme === 'snow') {
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      if (this.t[this.idx(x, y)] === 'w') {
+        g.fillStyle = 'rgba(150,210,240,0.45)';
+        g.fillRect(x * TILE, y * TILE, TILE, TILE);
+      }
+    }
+  }
   this.baked = c;
   /* 小地图 */
   var mc = document.createElement('canvas');
   mc.width = W; mc.height = H;
   var mg = mc.getContext('2d');
-  var MINI_COLOR = { g: '#4e8a3c', g2: '#427632', w: '#2e6ea0', l: '#c84818', r: '#62626e', k: '#62626e', s: '#7c7468', cf: '#3c3444', cw: '#241e2c', m: '#3d5c46', mw: '#2c5a54', wd: '#8c6a42', p: '#a08858' };
+  var MINI_COLOR = { g: '#4e8a3c', g2: '#427632', w: '#2e6ea0', l: '#c84818', r: '#62626e', k: '#62626e', s: '#7c7468', cf: '#3c3444', cw: '#241e2c', m: '#3d5c46', mw: '#2c5a54', wd: '#8c6a42', p: '#a08858', sn: '#c8d4dc', pg: '#6a9a52', sa: '#d8bc7e', ab: '#2a2440' };
   for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
     mg.fillStyle = MINI_COLOR[this.t[this.idx(x, y)]] || '#4e8a3c';
     mg.fillRect(x, y, 1, 1);
@@ -426,4 +549,19 @@ GameMap.prototype.bake = function () {
 /* 传送门绘制数据（静态圆环动画由 game 层画） */
 GameMap.prototype.drawGround = function (g, cam, vw, vh) {
   g.drawImage(this.baked, -cam.x, -cam.y);
+};
+
+/* ---------------- 环境氛围（game.drawAmbient 消费） ----------------
+   tint: 全屏色罩；darkV: 暗角强度；vg: 暗角色调 rgb；dust: 环境粒子 {色,数量} */
+var THEME_AMBIENT = {
+  grass:   { tint: null, darkV: 0.28, vg: '8,14,6',   dust: ['#b8e890', 10] },
+  forest:  { tint: 'rgba(30,60,50,0.08)', darkV: 0.34, vg: '4,12,8', dust: ['#a8e8c0', 12] },
+  volcano: { tint: 'rgba(255,90,16,0.11)', darkV: 0.32, vg: '36,8,0', dust: ['#ffb060', 16] },
+  cave:    { tint: 'rgba(20,18,50,0.06)', darkV: 0.32, vg: '4,4,14', dust: ['#8fa8e0', 8] },
+  marsh:   { tint: 'rgba(60,90,80,0.10)', darkV: 0.36, vg: '6,14,10', dust: ['#b0d8a8', 10] },
+  snow:    { tint: 'rgba(150,200,240,0.08)', darkV: 0.30, vg: '16,26,46', dust: ['#ffffff', 22] },
+  peach:   { tint: 'rgba(255,190,210,0.07)', darkV: 0.30, vg: '26,12,16', dust: ['#f2c0d0', 24] },
+  desert:  { tint: 'rgba(240,190,110,0.10)', darkV: 0.34, vg: '30,20,4', dust: ['#e8cc90', 20] },
+  abyss:   { tint: 'rgba(60,40,110,0.12)', darkV: 0.42, vg: '8,4,22', dust: ['#b0a0e8', 14] },
+  village: { tint: 'rgba(255,200,120,0.05)', darkV: 0.24, vg: '10,8,4', dust: ['#ffe9a0', 6] }
 };

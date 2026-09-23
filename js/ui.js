@@ -21,7 +21,7 @@ var UI = {
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.code === 'Escape' || e.code === 'Tab') {
         e.preventDefault();
-        if (self.open === 'title' || self.open === 'ending') return;
+        if (self.open === 'title' || self.open === 'ending' || self.open === 'prologue') return;   /* 序章有自己的翻页键 */
         if (self.open) {
           var popup = document.querySelector('.popup-box');
           if (popup) { popup.remove(); return; }
@@ -47,8 +47,11 @@ var UI = {
         }
         el = el.parentNode;
       }
-      /* 点空白关闭 */
-      if (e.target === self.$overlay && self.open && self.open !== 'ending') self.close();
+      /* 点空白关闭（序章点空白=翻页） */
+      if (e.target === self.$overlay && self.open && self.open !== 'ending') {
+        if (self.open === 'prologue' && self._prologueNext) { self._prologueNext(); return; }
+        self.close();
+      }
     });
     this.$overlay.addEventListener('dblclick', function (e) {
       var el = e.target;
@@ -192,7 +195,7 @@ var UI = {
       hudPets.innerHTML = html;
     }
     /* 模式芯片 */
-    this._el('petMode').innerHTML = '灵宠：<b data-act="cyclePetMode">' +
+    this._el('petMode').innerHTML = (Game.resonance ? '<b class="reso">✦共鸣</b>　' : '') + '灵宠：<b data-act="cyclePetMode">' +
       { attack: '进攻', defend: '防守', follow: '跟随' }[Game.petMode] + '</b>　|　自动：<b data-act="cycleAuto">' + (P.auto ? '开' : '关') + '</b>';
     /* BOSS 倒计时 */
     var bt = this._el('bossTimer');
@@ -205,20 +208,25 @@ var UI = {
     var et = this._el('eventTrack');
     if (Game.event) {
       et.style.display = '';
-      var names = { migration: '✨ 灵物迁徙', frenzy: '⚠ 兽潮涌动', caravan: '🛒 行脚商队' };
+      var names = { migration: '✨ 灵物迁徙', frenzy: '⚠ 兽潮涌动', caravan: '🛒 行脚商队', treasure: '💰 藏宝现世' };
       et.innerHTML = names[Game.event.type] + '　<em>' + Math.ceil(Game.event.t) + 's</em>';
     } else et.style.display = 'none';
     /* 委托追踪（最多 3 行，更多折叠，避免顶到 BOSS 倒计时） */
     var qt = this._el('questTrack');
     var qh = '', shownN = 0, hiddenN = 0;
+    function qProg(q, st) {
+      var g = q.goal;
+      if (g.type === 'item') return Math.min((Game.bag[g.item] || 0), g.n) + '/' + g.n;
+      if (g.type === 'dex') return Math.min(Game.dexCaughtCount(), g.n) + '/' + g.n;
+      if (g.type === 'stelae') return Math.min(Game.stelaeCount(), g.n) + '/' + g.n;
+      return Math.min(st.p, g.n) + '/' + g.n;
+    }
     Object.keys(Game.quests).forEach(function (qid) {
       var q = QUESTS.filter(function (x) { return x.id === qid; })[0];
       if (!q) return;
       var st = Game.quests[qid];
       var ready = Game.questReady(q);
-      var prog = q.goal.type === 'item' ? Math.min((Game.bag[q.goal.item] || 0), q.goal.n) + '/' + q.goal.n
-        : q.goal.type === 'dex' ? Math.min(Game.dexCaughtCount(), q.goal.n) + '/' + q.goal.n
-        : Math.min(st.p, q.goal.n) + '/' + q.goal.n;
+      var prog = qProg(q, st);
       if (shownN < 3) {
         qh += '<div class="qt-line' + (ready ? ' ready' : '') + '">' + (q.main ? '★' : '◈') + ' ' + q.name +
           (ready ? ' <em>✔ 可交付</em>' : ' <em>' + prog + '</em>') + '</div>';
@@ -402,6 +410,14 @@ var UI = {
     }).join('');
     return '<div class="sec-title">山海图鉴　收录 ' + caught + ' / ' + Object.keys(SPECIES).length +
       '（捕捉即收录 · 守护者凭击败收录 · 进化形态凭进化收录）</div>' +
+      '<div class="sec-title">山海遗刻　' + Game.stelaeCount() + ' / ' + STELAE.length +
+      '（散布各图的古碑，走近按 F 读取——集齐可获遗刻完璧之赏）</div>' +
+      '<div class="dex-grid">' + STELAE.map(function (st) {
+        var got = Game.flags.stelaeFound && Game.flags.stelaeFound[st.id];
+        return '<div class="dex-cell ' + (got ? 'got' : 'unk') + '" title="' + (got ? st.name + '（' + MAPS[st.map].name + '）' : '未发现 · ' + MAPS[st.map].name) + '">' +
+          (got ? '<span>◈</span>' : '<div class="silh">?</div>') +
+          '<span>' + (got ? st.name : MAPS[st.map].name + '？') + '</span></div>';
+      }).join('') + '</div>' +
       '<div class="dex-grid">' + cells + '</div>';
   },
 
@@ -411,11 +427,13 @@ var UI = {
       var q = QUESTS.filter(function (x) { return x.id === qid; })[0];
       var st = Game.quests[qid];
       var ready = Game.questReady(q);
-      var prog = q.goal.type === 'item' ? Math.min((Game.bag[q.goal.item] || 0), q.goal.n) + '/' + q.goal.n
-        : q.goal.type === 'dex' ? Math.min(Game.dexCaughtCount(), q.goal.n) + '/' + q.goal.n
-        : Math.min(st.p, q.goal.n) + '/' + q.goal.n;
+      var prog;
+      if (q.goal.type === 'item') prog = Math.min((Game.bag[q.goal.item] || 0), q.goal.n) + '/' + q.goal.n;
+      else if (q.goal.type === 'dex') prog = Math.min(Game.dexCaughtCount(), q.goal.n) + '/' + q.goal.n;
+      else if (q.goal.type === 'stelae') prog = Math.min(Game.stelaeCount(), q.goal.n) + '/' + q.goal.n;
+      else prog = Math.min(st.p, q.goal.n) + '/' + q.goal.n;
       return '<div class="quest-row' + (ready ? ' ready' : '') + '">' +
-        '<b>' + (q.main ? '★ 主线' : '◈ 支线') + ' · ' + q.name + '</b>' +
+        '<b>' + (q.main ? '★ 主线' : q.hidden ? '◇ 隐线' : '◈ 支线') + ' · ' + q.name + '</b>' +
         '<div>' + q.text + '</div>' +
         '<div class="dim">委托人：' + questGiveText(q) + (ready ? '　<em class="ok">✔ 可交付</em>' : '　进度 ' + prog) + '</div></div>';
     }).join('') || '<div class="dim">没有进行中的委托</div>';
@@ -424,7 +442,7 @@ var UI = {
       return q ? '<div class="quest-row done"><b>✔ ' + q.name + '</b></div>' : '';
     }).join('');
     var acceptable = QUESTS.filter(function (q) {
-      return !q.main && !Game.quests[q.id] && !Game.questsDone[q.id];
+      return !q.main && !q.hidden && !Game.quests[q.id] && !Game.questsDone[q.id];
     }).map(function (q) {
       return '<div class="quest-row avail"><b>◈ ' + q.name + '</b><div>' + q.text + '</div>' +
         '<div class="dim">委托人：' + questGiveText(q) + ' · 去找 TA 接取</div></div>';
@@ -507,10 +525,14 @@ var UI = {
     if (npcId === 'lingyu') opts.push({ act: 'lore', arg: 'lingyu', label: '请教御灵之道' });
     opts.push({ act: 'close', label: '告辞' });
     var line = npc.lines || '……';
-    var lore = {
-      elder: '这世道，灵物躁动，守护者也不再安眠。山海图经散佚，还望行侠重拾。',
-      lingyu: '灵物如友：喂它药、带它战、莫弃它。血量越低越好捕捉，带上异常状态更佳。'
-    }[npcId] || line;
+    /* 分支对话：按 flags/进度现算，取第一条满足项（fallback 到 NPC 默认台词） */
+    var lore = line;
+    if (NPC_LINES[npcId]) {
+      for (var li = 0; li < NPC_LINES[npcId].length; li++) {
+        var LN = NPC_LINES[npcId][li];
+        if (!LN.if || LN.if(Game)) { lore = LN.t; break; }
+      }
+    }
     var face = npc.face;
     this.$overlay.innerHTML =
       '<div class="dialog-box">' +
@@ -674,18 +696,117 @@ var UI = {
     for (var i = 0; i < list.length; i++) list[i].remove();
   },
 
+  /* ===================== 山海遗刻 / 后日谈 / 序章 ===================== */
+  showStela: function (def, reread) {
+    this.open = 'stela';
+    this.$overlay.innerHTML =
+      '<div class="ending-box stela-box">' +
+      '<div class="ending-title">◈ ' + def.name + (reread ? ' · 重读' : ' · 遗刻出土') + ' ◈</div>' +
+      '<div class="ending-text">' + def.txt + '</div>' +
+      '<div class="dim">—— 上古拾灵人手记 · 山海图经卷首</div>' +
+      '<button class="btn big" data-act="close">合上手记</button>' +
+      '</div>';
+    this.$overlay.classList.add('show');
+    SFX.play('ui');
+  },
+  afterDialog: function (q) {
+    this.open = 'after';
+    var who = questGiveText(q);
+    this.$overlay.innerHTML =
+      '<div class="dialog-box">' +
+      '<div class="dlg-head"><div><b>' + who + '</b><div class="dim">委托完成 · ' + q.name + '</div></div></div>' +
+      '<div class="dlg-text">' + q.after + '</div>' +
+      '<div class="dlg-opts"><div class="dlg-opt" data-act="close">（继续旅程）</div></div>' +
+      '</div>';
+    this.$overlay.classList.add('show');
+    SFX.play('heal');
+  },
+
+  /* 序章过场：全屏文字卡，点击/回车翻页 */
+  PROLOGUE: [
+    { title: '· 山海拾灵 ·', lines: [
+      '上古有山，有海，有灵。',
+      '人与灵物立约，互不相负——那一代人，被称作「拾灵人」。',
+      '后来，盟约散佚，守护者沉睡，山海沉默了三千年。'
+    ] },
+    { title: '· 躁动的时代 ·', lines: [
+      '落霞村的钟又响了。',
+      '灵物躁动，守护者一个接一个醒来，山海之间的商路断了，图经散了。',
+      '村长姜石说：需要一个拿起武器、也肯伸出手的人。'
+    ] },
+    { title: '· 启程 ·', lines: [
+      '击败灵物，或与之结契——用剑，也用心。',
+      'WASD 移动 · 鼠标左键攻击 · E 捕捉 · F 对话',
+      '山海之路，自落霞村始。'
+    ] }
+  ],
+  prologue: function (onEnd) {
+    var self = this;
+    this.open = 'prologue';
+    var page = 0;
+      function render() {
+      var c = self.PROLOGUE[page];
+      self.$overlay.innerHTML =
+        '<div class="prologue-box" data-act="prologueNext"><div class="prologue-title">' + c.title + '</div>' +
+        c.lines.map(function (l) { return '<div class="prologue-line">' + l + '</div>'; }).join('') +
+        '<div class="prologue-hint">点击 / 回车 翻页（' + (page + 1) + '/' + self.PROLOGUE.length + '）</div></div>';
+      self.$overlay.classList.add('show');
+    }
+    function next() {
+      page++;
+      if (page >= self.PROLOGUE.length) {
+        if (document.removeEventListener) document.removeEventListener('keydown', keyHandler);
+        self._prologueNext = null;
+        self.close();
+        onEnd && onEnd();
+        return;
+      }
+      render();
+      SFX.play('ui');
+    }
+    function keyHandler(e) {
+      if (e.code === 'Enter' || e.code === 'Space' || e.code === 'Escape') { e.preventDefault(); next(); }
+    }
+    document.addEventListener('keydown', keyHandler);
+    this._prologueNext = next;
+    render();
+    SFX.play('portal');
+  },
+
   /* ===================== 结局 ===================== */
   showEnding: function () {
     this.open = 'ending';
     var P = Game.player;
+    var more = Game.stats.killedZhulong
+      ? '烛龙合眼，昼夜各归其位。<br>可是归墟之底似乎还有更深的传说——若八块山海遗刻尽数寻得，真相将再启。'
+      : '山海重归安宁，而你的图经才刚刚翻开第一页。';
     this.$overlay.innerHTML =
       '<div class="ending-box">' +
       '<div class="ending-title">· 混沌终焉 ·</div>' +
       '<div class="ending-text">雷声停了。<br>帝江识歌舞，却不识悲悯；如今它化作光点，散入云海。<br>' +
-      '山海重归安宁，而你的图经才刚刚翻开第一页。<br><br>' +
+      more + '<br><br>' +
       '—— ' + P.name + ' · ' + CLASSES[P.cls].name + ' Lv.' + P.lv + ' ——<br>' +
       '收录灵物 ' + Game.dexCaughtCount() + ' 种 · 击败守护者 ' + Game.stats.statBossKill + ' 次 · 结契 ' + Game.stats.statCatch + ' 只</div>' +
       '<button class="btn big" data-act="close">继续游玩（世界仍在）</button>' +
+      '</div>';
+    this.$overlay.classList.add('show');
+  },
+  showTrueEnding: function () {
+    this.open = 'ending';
+    var P = Game.player;
+    this.$overlay.innerHTML =
+      '<div class="ending-box true-ending">' +
+      '<div class="ending-title">· 遗刻完璧 · 昼夜各归 ·</div>' +
+      '<div class="ending-text">' +
+      '八块遗刻次第亮起，像八盏等了三千年的灯。<br>' +
+      '烛龙之睛在你掌心睁开——你终于读懂了碑文最末那行小字：<br><br>' +
+      '「拾灵人不是驯服灵物的人，是被山海选中、替它记住这一切的人。」<br><br>' +
+      '风从北冥吹来，卷着桃花瓣、雪粒、沙与火星。<br>' +
+      '那是所有先行者的问候，也是山海对你说：欢迎回家。<br><br>' +
+      '—— ' + P.name + ' · ' + CLASSES[P.cls].name + ' Lv.' + P.lv + ' · 山海图经 卷终 ——<br>' +
+      '灵物 ' + Game.dexCaughtCount() + '/' + Object.keys(SPECIES).length + ' · 遗刻 ' + Game.stelaeCount() + '/' + STELAE.length +
+      ' · 守护者 ' + Game.stats.statBossKill + ' 战 · 结契 ' + Game.stats.statCatch + ' 只 · 游历 ' + U.timeText(Game.playTime) + '</div>' +
+      '<button class="btn big" data-act="close">继续游玩（山海永在）</button>' +
       '</div>';
     this.$overlay.classList.add('show');
   },
@@ -736,7 +857,8 @@ var UI = {
         var name = (document.getElementById('nameInput') || {}).value || '无名客';
         var cls = this._pickCls || 'sword';
         Game.newGame(cls, name.trim().slice(0, 6) || '无名客');
-        this.close();
+        /* 序章正在播就不关面板（序章自带收尾 close），否则照常关闭 */
+        if (this.open !== 'prologue') this.close();
         Game.state = 'play';
         this.buildHud();
         break;
@@ -820,7 +942,7 @@ var UI = {
       }
       case 'toTitle': Game.save(); this.showTitle(); break;
       /* 对话 */
-      case 'turnin': Game.turnInQuest(arg); this.talk(this.talkNpc); break;
+      case 'turnin': Game.turnInQuest(arg); if (this.open !== 'after') this.talk(this.talkNpc); break;
       case 'accept': Game.acceptQuest(arg); this.talk(this.talkNpc); break;
       case 'shop': this.openShop(SHOP_STOCK); break;
       case 'smith': this.openSmith(); break;
@@ -864,7 +986,8 @@ var UI = {
           SFX.play('buy');
           Game.toast('购得【' + ed.name + '】（在背包中双击装备）');
           Game.save();
-          this.renderSmith();
+          if (this.open === 'smith') this.renderSmith();
+          else this.renderShop();
         }
         break;
       }
@@ -916,6 +1039,7 @@ var UI = {
       }
       /* popup */
       case 'closePopup': this.closePopup(); break;
+      case 'prologueNext': if (this._prologueNext) this._prologueNext(); break;
     }
   },
 

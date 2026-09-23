@@ -88,9 +88,9 @@ Actor.prototype.tickKnock = function (dt) {
   }
 };
 Actor.prototype.drawShadow = function (g) {
-  g.fillStyle = 'rgba(20,16,24,0.30)';
+  g.fillStyle = 'rgba(16,10,20,0.40)';
   g.beginPath();
-  g.ellipse(this.x - Game.cam.x, this.y - Game.cam.y + this.r * 0.9, this.r * 0.9, this.r * 0.38, 0, 0, Math.PI * 2);
+  g.ellipse(this.x - Game.cam.x, this.y - Game.cam.y + this.r * 0.9, this.r * 1.05, this.r * 0.42, 0, 0, Math.PI * 2);
   g.fill();
 };
 
@@ -121,12 +121,12 @@ Player.prototype.skills = function () {
   return CLASSES[this.cls].skills.filter(function (s) { return s[0] <= self.lv; }).map(function (s) { return s[1]; });
 };
 Player.prototype.tier = function () {
-  /* 立绘档位：已穿的最高档 */
+  /* 立绘档位：已穿的最高档（寒铁 lv30 → 3） */
   var best = 0;
   Object.keys(this.equip).forEach(function (k) {
     var e = this.equip[k];
     if (!e) return;
-    var t = EQUIPS[e.id].lv >= 20 ? 2 : EQUIPS[e.id].lv >= 10 ? 1 : 0;
+    var t = EQUIPS[e.id].lv >= 30 ? 3 : EQUIPS[e.id].lv >= 20 ? 2 : EQUIPS[e.id].lv >= 10 ? 1 : 0;
     best = Math.max(best, t);
   }, this);
   return best;
@@ -638,7 +638,7 @@ Monster.prototype.draw = function (g) {
   var sx = this.x - Game.cam.x, sy = this.y - Game.cam.y;
   this.drawShadow(g);
   var frame = Math.floor(this.walkT) % 2;
-  var scale = this.boss ? 1.35 : this.elite ? 1.15 : 1;
+  var scale = this.boss ? 1.5 : this.elite ? 1.15 : 1;
   var cv = Sprites.creatureCv(this.spId, frame, this.face < 0, this.shiny);
   if (scale !== 1) {
     g.save();
@@ -648,6 +648,19 @@ Monster.prototype.draw = function (g) {
     g.restore();
   } else {
     g.drawImage(cv, Math.round(sx - 30), Math.round(sy - 36));
+  }
+  if (this.boss) {
+    /* BOSS 常驻光环：画在本体之后，加色发光椭圆从脚下铺出（一阶金、狂暴转红） */
+    var aura0 = this.phase >= 3 ? '#ff4030' : this.phase >= 2 ? '#ff9030' : '#e8c060';
+    g.save();
+    g.globalCompositeOperation = 'lighter';
+    g.globalAlpha = 0.22 + Math.sin(Game.time * 3) * 0.06;
+    g.fillStyle = aura0;
+    g.beginPath(); g.ellipse(sx, sy + 8, 82, 30, 0, 0, 6.28); g.fill();
+    g.globalAlpha = 0.85;
+    g.strokeStyle = aura0; g.lineWidth = 2.5;
+    g.beginPath(); g.ellipse(sx, sy + 8, 88 + Math.sin(Game.time * 3) * 4, 34, 0, 0, 6.28); g.stroke();
+    g.restore();
   }
   /* BOSS / 精英标记 */
   if (this.boss || this.elite) {
@@ -662,19 +675,12 @@ Monster.prototype.draw = function (g) {
     g.fillRect(sx - 26 * scale, sy - 34 * scale, 52 * scale, 40 * scale);
     g.globalCompositeOperation = 'source-over';
   }
-  if (this.hp < this.st.hp) this.drawHpBar(g, sx, sy - 44 * scale, this.boss ? 46 : 30);
+  if (this.hp < this.st.hp) this.drawHpBar(g, sx, sy - 44 * scale, this.boss ? 52 : 30);
   if (this.boss) {
-    /* 狂暴阶段：脚下大光环 + 身体染色 + 环绕粒子（每阶段递进可读） */
+    /* 狂暴阶段：环绕粒子 + 身体染色（每阶段递进可读；地面光环已由常驻 aura 承担） */
     var pct = this.hp / this.st.hp;
     if (this.phase >= 2) {
       var auraC = this.phase >= 3 ? '#ff4030' : '#ff9030';
-      g.globalAlpha = 0.4 + Math.sin(Game.time * 6) * 0.12;
-      g.fillStyle = auraC;
-      g.beginPath(); g.ellipse(sx, sy + 8, 38, 15, 0, 0, 6.28); g.fill();
-      g.globalAlpha = 0.9;
-      g.strokeStyle = auraC; g.lineWidth = 2;
-      g.beginPath(); g.ellipse(sx, sy + 8, 44 + Math.sin(Game.time * 4) * 3, 17, 0, 0, 6.28); g.stroke();
-      g.globalAlpha = 1;
       /* 环绕火星 */
       var nSpark = this.phase >= 3 ? 8 : 5, iSp;
       for (iSp = 0; iSp < nSpark; iSp++) {
@@ -716,6 +722,7 @@ function Projectile(o) {
   this.skill = o.skill || null;
   this.av = o.av || 0;                        /* 角速度（螺旋弹幕） */
   this.dead = false;
+  this.trail = [];                            /* 拖尾采样点（最多 16） */
 }
 Projectile.prototype.update = function (dt) {
   this.ttl -= dt;
@@ -726,6 +733,8 @@ Projectile.prototype.update = function (dt) {
     this.vx = Math.cos(a) * sp; this.vy = Math.sin(a) * sp;
   }
   this.x += this.vx * dt; this.y += this.vy * dt;
+  this.trail.push({ x: this.x, y: this.y });
+  if (this.trail.length > 16) this.trail.shift();
   if (Game.map.shotBlockedAt(this.x, this.y)) {
     this.dead = true;
     Game.addFx({ type: 'hit', x: this.x, y: this.y, t: 0.25, el: this.el });
@@ -750,6 +759,43 @@ Projectile.prototype.draw = function (g) {
   var sx = this.x - Game.cam.x, sy = this.y - Game.cam.y;
   var c = ELEMENTS[this.el] ? ELEMENTS[this.el].color : '#cfd8dc';
   var ang = Math.atan2(this.vy, this.vx);
+  /* --- 元素拖尾：沿轨迹渐显，各元素有签名形状 --- */
+  if (this.trail.length > 3 && this.style !== 'arrow' && this.style !== 'rock') {
+    var isFire = this.el === 'fire', isThunder = this.el === 'thunder', isWater = this.el === 'water';
+    g.save();
+    if (isFire) {
+      for (var ti = 0; ti < this.trail.length; ti += 2) {
+        var tp = this.trail[ti], ta = 0.05 + ti / this.trail.length * 0.45;
+        g.globalAlpha = ta;
+        g.fillStyle = ti % 4 < 2 ? '#ff9040' : '#ffd060';
+        var ts = 2 + ti / this.trail.length * 3;
+        g.fillRect(tp.x - Game.cam.x - ts / 2, tp.y - Game.cam.y - ts / 2 + Math.sin(Game.time * 20 + ti) * 1.5, ts, ts);
+      }
+    } else if (isThunder) {
+      g.globalAlpha = 0.5; g.strokeStyle = '#ffe070'; g.lineWidth = 1.5;
+      g.beginPath();
+      for (var tj = 0; tj < this.trail.length; tj++) {
+        var tq = this.trail[tj];
+        var ox2 = tj < this.trail.length - 1 ? Math.sin(tj * 2.7 + Game.time * 30) * 2 : 0;
+        if (tj === 0) g.moveTo(tq.x - Game.cam.x + ox2, tq.y - Game.cam.y);
+        else g.lineTo(tq.x - Game.cam.x + ox2, tq.y - Game.cam.y);
+      }
+      g.stroke();
+    } else if (isWater) {
+      for (var tk = this.trail.length - 6; tk < this.trail.length; tk += 3) {
+        if (tk < 0) continue;
+        var tr = this.trail[tk];
+        g.globalAlpha = 0.10 + (tk / this.trail.length) * 0.25;
+        g.strokeStyle = c; g.lineWidth = 1;
+        g.beginPath(); g.arc(tr.x - Game.cam.x, tr.y - Game.cam.y, 3 + (this.trail.length - tk) * 0.4, 0, 6.28); g.stroke();
+      }
+    } else {
+      var last = this.trail[this.trail.length - 1];
+      g.globalAlpha = 0.25; g.fillStyle = c;
+      g.beginPath(); g.arc(last.x - Game.cam.x, last.y - Game.cam.y, this.r + 4, 0, 6.28); g.fill();
+    }
+    g.restore();
+  }
   g.save();
   g.translate(sx, sy);
   g.rotate(ang);
@@ -873,7 +919,24 @@ CaptureBall.prototype.draw = function (g) {
 };
 
 /* ---------------- 特效 ---------------- */
-function Effect(o) { U.extend(this, o); this.t = this.t || 0.3; this.dead = false; }
+function Effect(o) {
+  U.extend(this, o);
+  this.t = this.t || 0.3;
+  this.dur = this.dur || this.t;
+  this.seed = this.seed || Math.random() * 99;
+  this.dead = false;
+  /* 粒子初速缓存（elemBurst 用，seed 确定性） */
+  if (this.type === 'elemBurst' && !this.parts) {
+    this.parts = [];
+    var rnd = mulberry32(Math.floor(this.seed * 1000));
+    var n = this.n || 24;
+    for (var i = 0; i < n; i++) {
+      var a = i / n * 6.28 + rnd() * 0.5;
+      var v = (0.5 + rnd() * 0.8) * (this.spread || 70);
+      this.parts.push({ a: a, v: v, w: 1.5 + rnd() * 2.5, gold: rnd() < 0.33 });
+    }
+  }
+}
 Effect.prototype.update = function (dt) {
   this.t -= dt;
   if (this.t <= 0) this.dead = true;
@@ -882,16 +945,143 @@ Effect.prototype.update = function (dt) {
 Effect.prototype.draw = function (g) {
   var sx = this.x - Game.cam.x, sy = this.y - Game.cam.y;
   var life = U.clamp(this.t / (this.dur || 0.3), 0, 1);
+  var k = 1 - life;                             /* 进度 0→1 */
   switch (this.type) {
+    case 'elemBurst': {
+      /* 元素签名爆裂：粒子沿各自角度扩散 + 外圈冲击环（lighter） */
+      var c = this.el && ELEMENTS[this.el] ? ELEMENTS[this.el].color : '#ffd080';
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      for (var i = 0; i < this.parts.length; i++) {
+        var pt = this.parts[i];
+        var d = pt.v * (0.3 + k * 0.7);
+        var px = sx + Math.cos(pt.a) * d, py = sy + Math.sin(pt.a) * d - k * 8;
+        g.globalAlpha = (1 - k) * 0.9;
+        g.fillStyle = pt.gold ? '#ffe9a0' : c;
+        var sz = pt.w * (1 - k * 0.5);
+        g.fillRect(px - sz / 2, py - sz / 2, sz, sz);
+      }
+      /* 白热芯闪光（双层：核 + 芯） */
+      g.globalAlpha = (1 - k) * (1 - k) * 0.85;
+      g.fillStyle = '#ffe9b0';
+      g.beginPath(); g.arc(sx, sy, (this.spread || 70) * 0.34 * (1 - k * 0.4), 0, 6.28); g.fill();
+      g.globalAlpha = (1 - k) * (1 - k) * (1 - k) * 0.95;
+      g.fillStyle = '#ffffff';
+      g.beginPath(); g.arc(sx, sy, (this.spread || 70) * 0.16, 0, 6.28); g.fill();
+      g.restore();
+      break;
+    }
+    case 'greatslash': {
+      /* 三层弧：外宽弧 + 主弧 + 白刃芯（demo 手法） */
+      var r = this.radius || 46;
+      var a0 = this.ang - (this.arc || 1.8) / 2, a1 = this.ang + (this.arc || 1.8) / 2;
+      var rr = r * (0.55 + k * 0.55);
+      g.save();
+      g.strokeStyle = 'rgba(255,220,160,0.45)'; g.lineWidth = 14 * (1 - k) + 3;
+      g.beginPath(); g.arc(sx, sy, rr * 0.94, a0, a1); g.stroke();
+      g.strokeStyle = 'rgba(255,250,225,' + (0.95 * life + 0.05) + ')'; g.lineWidth = 7 * (1 - k) + 1.5;
+      g.beginPath(); g.arc(sx, sy, rr, a0, a1); g.stroke();
+      g.strokeStyle = 'rgba(255,255,255,' + life + ')'; g.lineWidth = 2.5 * (1 - k) + 1;
+      g.beginPath(); g.arc(sx, sy, rr * 0.97, a0 + 0.12, a1 - 0.12); g.stroke();
+      g.restore();
+      break;
+    }
+    case 'bolt': {
+      /* 闪电：7 段折线双 pass（元素色外 + 白内），中段抖动最大 */
+      var bc = this.el && ELEMENTS[this.el] ? ELEMENTS[this.el].color : '#ffe070';
+      var x0 = this.x0 !== undefined ? this.x0 - Game.cam.x : sx, y0 = this.y0 !== undefined ? this.y0 - Game.cam.y : sy;
+      var w2 = Math.sin(this.seed) * 26 * (1 - Math.abs(k - 0.5) * 2);
+      g.save();
+      for (var pass = 0; pass < 2; pass++) {
+        g.strokeStyle = pass === 0 ? bc : '#ffffff';
+        g.lineWidth = pass === 0 ? 6 : 2;
+        g.globalAlpha = life;
+        g.beginPath(); g.moveTo(x0, y0);
+        for (var sI = 1; sI <= 7; sI++) {
+          var f = sI / 7;
+          g.lineTo(U.lerp(x0, sx, f) + Math.sin(sI * 12.9 + this.seed) * w2 * 0.5,
+            U.lerp(y0, sy, f) + Math.cos(sI * 9.7 + this.seed) * w2 * 0.3);
+        }
+        g.lineTo(sx, sy);
+        g.stroke();
+      }
+      g.restore();
+      break;
+    }
+    case 'meteor': {
+      /* 两段式：k<0.62 拖尾下落，之后爆闪 */
+      g.save();
+      if (k < 0.62) {
+        var fk = k / 0.62;
+        var mx = sx + (1 - fk) * 90, my = sy - (1 - fk) * 150;
+        g.globalAlpha = 0.9;
+        g.strokeStyle = 'rgba(255,180,80,0.5)'; g.lineWidth = 4;
+        g.beginPath(); g.moveTo(mx + 26, my - 44); g.lineTo(mx, my); g.stroke();
+        g.fillStyle = '#ff9840';
+        g.beginPath(); g.arc(mx, my, 7, 0, 6.28); g.fill();
+        g.fillStyle = '#ffe9a0';
+        g.beginPath(); g.arc(mx, my, 3.5, 0, 6.28); g.fill();
+      } else {
+        var ek = (k - 0.62) / 0.38;
+        g.globalCompositeOperation = 'lighter';
+        g.globalAlpha = (1 - ek) * 0.9;
+        g.fillStyle = '#ff8030';
+        g.beginPath(); g.arc(sx, sy, (this.radius || 40) * (0.4 + ek * 0.8), 0, 6.28); g.fill();
+        g.fillStyle = '#fff0c0';
+        g.beginPath(); g.arc(sx, sy, (this.radius || 40) * 0.35 * (1 - ek * 0.5), 0, 6.28); g.fill();
+      }
+      g.restore();
+      break;
+    }
+    case 'decal': {
+      /* 地面残留：暗底盘 + 龟裂纹 + 后灭的火舌（衰减曲线 pow(1-k,0.45)） */
+      var dr = this.radius || 30;
+      g.save();
+      g.globalAlpha = life * 0.8;
+      g.fillStyle = '#1c0d06';
+      g.beginPath(); g.ellipse(sx, sy, dr, dr * 0.55, 0, 0, 6.28); g.fill();
+      g.globalAlpha = life * 0.5;
+      g.strokeStyle = '#e86828'; g.lineWidth = 1.5;
+      g.beginPath();
+      g.moveTo(sx - dr * 0.6, sy); g.lineTo(sx - dr * 0.2, sy - dr * 0.2);
+      g.lineTo(sx + dr * 0.25, sy + dr * 0.05); g.lineTo(sx + dr * 0.6, sy - dr * 0.15);
+      g.stroke();
+      var fireA = Math.pow(1 - k, 0.45) * 0.7;
+      if (fireA > 0.02) {
+        g.globalCompositeOperation = 'lighter';
+        g.globalAlpha = fireA;
+        g.fillStyle = '#ff9040';
+        for (var fI = 0; fI < 3; fI++) {
+          var fx = sx + Math.sin(this.seed + fI * 2.4) * dr * 0.4;
+          var fh = 4 + Math.sin(Game.time * 14 + fI * 2 + this.seed) * 2.5;
+          g.fillRect(fx - 1.5, sy - fh, 3, fh);
+        }
+      }
+      g.restore();
+      break;
+    }
+    case 'afterimage': {
+      /* 残影：dash 用，白椭圆 lighter 渐隐 */
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = life * 0.35;
+      g.fillStyle = this.color || '#dfe8ff';
+      g.beginPath(); g.ellipse(sx, sy - 12, this.r || 14, 20, 0, 0, 6.28); g.fill();
+      g.restore();
+      break;
+    }
     case 'hit': {
       var c = this.el && ELEMENTS[this.el] ? ELEMENTS[this.el].color : '#fff0c0';
+      g.save();
+      g.globalCompositeOperation = 'lighter';
       g.globalAlpha = life;
-      for (var i = 0; i < 5; i++) {
-        var a = i / 5 * 6.28 + (this.x + this.y);
-        g.fillStyle = c;
-        g.fillRect(sx + Math.cos(a) * 8 * life, sy + Math.sin(a) * 8 * life - 3, 3, 3);
+      for (var i = 0; i < 6; i++) {
+        var a = i / 6 * 6.28 + (this.x + this.y) * 0.7;
+        var dd = 6 + (1 - life) * 10;
+        g.fillStyle = i % 3 === 0 ? '#fff8e0' : c;
+        g.fillRect(sx + Math.cos(a) * dd - 1.5, sy + Math.sin(a) * dd - 1.5, 3, 3);
       }
-      g.globalAlpha = 1;
+      g.restore();
       break;
     }
     case 'slash': {
@@ -966,10 +1156,12 @@ function FloatText(x, y, text, color, size) {
   this.size = size || 13;
   this.t = 1.1; this.dead = false;
   this.vx = U.rand(-14, 14);
+  this.vy = size >= 16 ? -95 : -60;            /* 暴击大字弹得更高，随后重力坠回 */
 }
 FloatText.prototype.update = function (dt) {
   this.t -= dt;
-  this.y -= 34 * dt;
+  this.vy += 90 * dt;                           /* 重力 */
+  this.y += this.vy * dt;
   this.x += this.vx * dt;
   if (this.t <= 0) this.dead = true;
 };
@@ -977,6 +1169,7 @@ FloatText.prototype.draw = function (g) {
   g.globalAlpha = U.clamp(this.t / 0.4, 0, 1);
   g.font = (this.size >= 18 ? 'bold ' : '') + this.size + 'px "Microsoft YaHei", sans-serif';
   g.textAlign = 'center';
+  g.lineJoin = 'round';
   g.strokeStyle = 'rgba(20,16,24,0.9)'; g.lineWidth = 3;
   g.strokeText(this.text, this.x - Game.cam.x, this.y - Game.cam.y);
   g.fillStyle = this.color;

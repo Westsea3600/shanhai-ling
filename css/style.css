@@ -65,10 +65,10 @@ html, body {
 
 .hud-bottom { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 20px; align-items: flex-end; }
 .skillbar, .quickbar { display: flex; gap: 6px; }
-.skill-slot { position: relative; width: 54px; height: 44px; border-radius: 7px; background: rgba(40,34,52,0.85); border: 2px solid #5a4a68; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+.skill-slot { position: relative; width: 54px; height: 44px; border-radius: 7px; background: rgba(14,11,22,0.94); border: 2px solid #7c6a44; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 0 rgba(255,230,180,0.12) inset; }
 .skill-slot.sm { width: 40px; height: 40px; }
-.skill-slot .sk-name { font-size: 11px; text-align: center; line-height: 1.15; padding: 0 2px; }
-.skill-slot .sk-key { position: absolute; top: 1px; left: 4px; font-size: 9px; color: #ffd740; }
+.skill-slot .sk-name { font-size: 11px; text-align: center; line-height: 1.15; padding: 0 2px; color: #f2ecdf; text-shadow: 0 1px 2px #000; }
+.skill-slot .sk-key { position: absolute; top: 1px; left: 4px; font-size: 9px; color: #ffd740; text-shadow: 0 1px 1px #000; }
 .skill-slot .sk-cd { position: absolute; left: 0; bottom: 0; width: 100%; height: 0; background: rgba(10,8,16,0.75); }
 .skill-slot.oncd { filter: grayscale(0.4) brightness(0.8); }
 
@@ -229,3 +229,20 @@ html, body {
 .ending-box { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; background: radial-gradient(ellipse at center, rgba(60,50,30,0.4), rgba(8,6,12,0.9)); }
 .ending-title { font-size: 40px; font-weight: 900; letter-spacing: 10px; color: #ffe9b0; text-shadow: 0 4px 30px rgba(255,215,64,0.4); }
 .ending-text { font-size: 15px; line-height: 2.2; text-align: center; color: #d8d0c8; }
+
+/* ---------- 序章 / 遗刻 ---------- */
+.prologue-box { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; cursor: pointer; background: radial-gradient(ellipse at center, rgba(40,36,60,0.55), rgba(8,6,12,0.94)); animation: fadeIn 0.6s; }
+.prologue-title { font-size: 34px; font-weight: 900; letter-spacing: 8px; color: #ffe9b0; text-shadow: 0 4px 24px rgba(255,215,64,0.35); }
+.prologue-line { font-size: 15px; line-height: 2.1; color: #cfc8d8; max-width: 560px; text-align: center; }
+.prologue-hint { font-size: 12px; color: #7a7284; margin-top: 30px; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.stela-box .ending-title { font-size: 26px; letter-spacing: 5px; }
+.stela-box .ending-text { font-size: 14px; color: #e8dfc8; max-width: 520px; }
+
+/* ---------- 对话选项过长滚动 ---------- */
+.dlg-opts { max-height: 320px; overflow-y: auto; }
+
+/* ---------- 真结局 / 共鸣 ---------- */
+.true-ending { background: radial-gradient(ellipse at center, rgba(90,70,40,0.5), rgba(10,8,16,0.95)); }
+.true-ending .ending-title { text-shadow: 0 4px 40px rgba(255,240,180,0.6), 0 0 18px rgba(255,215,64,0.5); }
+.reso { color: #e8c8ff; text-shadow: 0 0 8px rgba(200,150,255,0.6); }
