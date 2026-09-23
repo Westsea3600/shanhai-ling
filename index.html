@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>山海拾灵 · 御灵行纪</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="game" width="960" height="576"></canvas>
+
+    <!-- ===== HUD ===== -->
+    <div id="hud" class="hidden">
+      <div class="hud-col">
+        <div class="hud-left">
+          <div class="portrait" id="pPortrait"></div>
+          <div class="bars">
+            <div class="name-row"><span id="pName">行者</span><span class="lv" id="pLv">Lv.1</span></div>
+            <div class="bar hp"><i id="pHpFill"></i><span id="pHpTxt">100/100</span></div>
+            <div class="bar mp"><i id="pMpFill"></i><span id="pMpTxt">50/50</span></div>
+            <div class="bar xp"><i id="pXpFill"></i><span id="pXpTxt">0%</span></div>
+          </div>
+        </div>
+        <div class="pet-mode" id="petMode"></div>
+        <div class="hud-pets" id="hudPets"></div>
+      </div>
+
+      <div class="hud-right">
+        <div class="map-name" id="mapName">落霞村</div>
+        <div class="gold"><i class="coin"></i><span id="pGold">0</span></div>
+        <div class="boss-timer" id="bossTimer" style="display:none"></div>
+        <div class="event-track" id="eventTrack" style="display:none"></div>
+        <div class="quest-track" id="questTrack"></div>
+      </div>
+
+      <div class="hud-bottom">
+        <div class="skillbar" id="skillBar"></div>
+        <div class="quickbar" id="quickBar"></div>
+      </div>
+    </div>
+
+    <!-- ===== 覆盖层 ===== -->
+    <div id="overlay"></div>
+    <div id="toasts"></div>
+    <div id="fade"></div>
+  </div>
+</div>
+
+<script src="js/core.js"></script>
+<script src="js/data.js"></script>
+<script src="js/sprites.js"></script>
+<script src="js/world.js"></script>
+<script src="js/entities.js"></script>
+<script src="js/battle.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>
