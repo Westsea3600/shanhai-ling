@@ -87,7 +87,7 @@ var Input = {
       /* 正在输入框里打字时放行默认行为（空格/方向键/F5 归浏览器与文本编辑） */
       var tag = e.target && e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab', 'F5'].indexOf(e.code) >= 0) e.preventDefault();
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab', 'F5', 'F11'].indexOf(e.code) >= 0) e.preventDefault();
       if (!self.keys[e.code]) self.once[e.code] = true;
       self.keys[e.code] = true;
     });

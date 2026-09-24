@@ -43,25 +43,29 @@ var COMBOS = [
   { id: 'tidesink', name: '潮陷', need: 'slow',   by: 'earth', mult: 1.8, radius: 80,  stun: 0.8, desc: '缓流 + 土系命中 → 重击并眩晕 0.8 秒' }
 ];
 
-/* ---------------- 职业 ---------------- */
+/* ---------------- 职业 ----------------
+   passive: 职业被动（差异化核心，Battle.applySkillHit / Player 结算） */
 var CLASSES = {
   sword: {
-    name: '剑客', weapon: 'sword', desc: '近身连斩，硬朗扎实',
+    name: '剑客', weapon: 'sword', desc: '近身连斩，越战越勇',
     base: { hp: 135, mp: 60, atk: 13, def: 7, spd: 130 },
     grow: { hp: 16, mp: 4, atk: 2.5, def: 1.3, spd: 1.2 },
-    skills: [[1, 'slash'], [3, 'airslash'], [7, 'swordspin'], [12, 'swordrain']]
+    skills: [[1, 'slash'], [3, 'airslash'], [6, 'swordspin'], [10, 'wavecut'], [14, 'swordrain'], [19, 'swordmind'], [25, 'heavyslam']],
+    passive: { name: '剑意', desc: '普攻命中叠剑意（上限 5 层，4 秒未击清零），每层技能伤害 +6%；受击伤害 -8%' }
   },
   mage: {
-    name: '术士', weapon: 'staff', desc: '元素法术，范围压制',
-    base: { hp: 100, mp: 115, atk: 15, def: 4.5, spd: 122 },
+    name: '术士', weapon: 'staff', desc: '元素压制，连携引爆',
+    base: { hp: 108, mp: 115, atk: 15, def: 4.5, spd: 122 },
     grow: { hp: 11, mp: 9, atk: 2.8, def: 0.9, spd: 1.0 },
-    skills: [[1, 'bolt'], [3, 'fireblast'], [7, 'zapchain'], [12, 'starfall']]
+    skills: [[1, 'bolt'], [3, 'fireblast'], [6, 'zapchain'], [10, 'frostlock'], [14, 'starfall'], [19, 'elementide'], [25, 'thundergod']],
+    passive: { name: '元素亲和', desc: '元素技能伤害 +12%，元素连携冷却减半' }
   },
   archer: {
-    name: '弓手', weapon: 'bow', desc: '游走点杀，身轻如燕',
+    name: '弓手', weapon: 'bow', desc: '游走点杀，远距致命',
     base: { hp: 112, mp: 80, atk: 12, def: 5.5, spd: 142 },
     grow: { hp: 13, mp: 6, atk: 2.3, def: 1.1, spd: 1.4 },
-    skills: [[1, 'shoot'], [3, 'trishot'], [7, 'windstep'], [12, 'stararrow']]
+    skills: [[1, 'shoot'], [3, 'trishot'], [6, 'windstep'], [10, 'rapidsalvo'], [14, 'stararrow'], [19, 'huntersmark'], [25, 'arrowrain']],
+    passive: { name: '鹰眼', desc: '攻击距离越远伤害越高（最远 +30%）；暴击 +5%' }
   }
 };
 
@@ -72,7 +76,7 @@ var SKILLS = {
   /* --- 玩家技能 --- */
   slash:     { name: '挥斩', el: 'none', kind: 'melee', power: 100, mp: 0, cd: 0.42, range: 52, arc: 2.0, desc: '朝准星方向挥出扇形斩击' },
   airslash:  { name: '破空斩', el: 'none', kind: 'dash', power: 130, mp: 12, cd: 5, dash: 190, range: 46, arc: 2.2, desc: '向前突进 190 码并挥出重斩' },
-  swordspin: { name: '剑气纵横', el: 'none', kind: 'aoe', power: 95, mp: 26, cd: 8, radius: 95, knock: 130, desc: '剑气以自身为中心向外旋斩一圈' },
+  swordspin: { name: '剑气纵横', el: 'wind', kind: 'aoe', power: 95, mp: 26, cd: 8, radius: 95, knock: 130, desc: '风走剑罡，以自身为中心旋斩一圈（可引爆灼烧）' },
   swordrain: { name: '万剑诀', el: 'none', kind: 'rain', power: 62, mp: 60, cd: 22, radius: 110, waves: 5, count: 4, duration: 2.4, desc: '唤出剑雨，5 波 × 4 剑覆盖目标区域' },
   bolt:      { name: '灵弹', el: 'none', kind: 'shot', power: 100, mp: 0, cd: 0.55, speed: 430, range: 430, desc: '射出一发灵力弹' },
   fireblast: { name: '炎爆术', el: 'fire', kind: 'aoe', power: 150, mp: 20, cd: 6, radius: 85, status: ['burn', 0.5], remote: true, cast: 420, desc: '在准星处炸开火球，50% 灼烧' },
@@ -81,7 +85,16 @@ var SKILLS = {
   shoot:     { name: '射击', el: 'none', kind: 'shot', power: 100, mp: 0, cd: 0.5, speed: 520, range: 470, desc: '射出一支羽箭' },
   trishot:   { name: '连珠箭', el: 'none', kind: 'shot', power: 72, mp: 12, cd: 4, count: 3, spread: 0.22, speed: 520, range: 470, desc: '一次射出 3 支箭' },
   windstep:  { name: '疾风步', el: 'wind', kind: 'buff', power: 0, mp: 15, cd: 9, dash: 130, buff: { spd: 0.38, dur: 4 }, desc: '向前疾掠，4 秒内移速 +38%' },
+  rapidsalvo:{ name: '影袭连射', el: 'wind', kind: 'shot', power: 46, mp: 18, cd: 6, count: 6, spread: 0.30, speed: 540, range: 440, desc: '风行影动连射 6 箭（可引爆灼烧）' },
   stararrow: { name: '贯星箭', el: 'wind', kind: 'shot', power: 320, mp: 55, cd: 20, speed: 760, range: 640, pierce: 99, wide: 16, desc: '蓄力射出贯穿一切的星辉长箭' },
+  huntersmark:{ name: '猎风印记', el: 'wind', kind: 'buff', power: 0, mp: 20, cd: 15, buff: { spd: 0.30, atk: 0.10, dur: 7 }, desc: '风佑其身：7 秒内移速 +30%、攻击 +10%' },
+  arrowrain: { name: '流星箭雨', el: 'wind', kind: 'rain', power: 58, mp: 58, cd: 24, radius: 125, waves: 6, count: 4, duration: 2.6, remote: true, cast: 460, desc: '箭如流星倾泻，6 波 × 4 箭覆盖目标区域' },
+  wavecut:   { name: '裂空剑气', el: 'none', kind: 'shot', power: 130, mp: 16, cd: 5, speed: 460, range: 380, pierce: 2, wide: 8, desc: '挥出贯穿剑气，可穿透 2 个敌人' },
+  swordmind: { name: '剑心通明', el: 'none', kind: 'buff', power: 0, mp: 24, cd: 16, buff: { def: 0.25, atk: 0.15, dur: 6 }, desc: '心剑如镜：6 秒内防御 +25%、攻击 +15%' },
+  heavyslam: { name: '天崩·裂地斩', el: 'earth', kind: 'aoe', power: 210, mp: 52, cd: 15, radius: 130, knock: 200, status: ['stun', 0.5], remote: true, cast: 300, desc: '跃起砸地，大范围重击并 50% 眩晕' },
+  frostlock: { name: '寒冰锁', el: 'water', kind: 'shot', power: 120, mp: 14, cd: 5.5, speed: 400, range: 360, pierce: 1, status: ['slow', 0.6], desc: '冰锥贯穿敌人并大幅减速' },
+  elementide:{ name: '元素潮汐', el: 'none', kind: 'buff', power: 0, mp: 30, cd: 18, buff: { atk: 0.18, spd: 0.12, dur: 8 }, desc: '元素涌动：8 秒内攻击 +18%、移速 +12%' },
+  thundergod:{ name: '湮灭·五雷正法', el: 'thunder', kind: 'chain', power: 160, mp: 60, cd: 22, jumps: 6, status: ['shock', 0.5], desc: '雷罚降临，在敌群间连锁跳跃 6 次' },
 
   /* --- 灵物技能（pet:true，玩家不可学） --- */
   tackle:    { name: '撞击', el: 'none', kind: 'melee', power: 100, mp: 0, cd: 1.3, range: 42, arc: 1.8, pet: true },
@@ -131,8 +144,8 @@ var SKILLS = {
   boss_gale:     { name: '裂风刃', el: 'wind', kind: 'shot', power: 105, mp: 0, cd: 2.6, count: 3, spread: 0.35, speed: 400, range: 420, bossOnly: true },
   boss_tornado:  { name: '魂缚旋风', el: 'wind', kind: 'aoe', power: 115, mp: 0, cd: 9, radius: 140, status: ['root', 0.35], bossOnly: true },
   boss_chaosring: { name: '浑沌环', el: 'none', kind: 'shot', power: 95, mp: 0, cd: 3.2, count: 10, spread: 6.283, speed: 260, range: 520, bossOnly: true },
-  boss_spiral:   { name: '魂旋弹幕', el: 'none', kind: 'shot', power: 80, mp: 0, cd: 7.5, count: 5, spread: 0.9, speed: 300, range: 520, spin: true, bossOnly: true },
-  boss_darkdash: { name: '浑沌冲撞', el: 'none', kind: 'dash', power: 170, mp: 0, cd: 6, dash: 300, range: 70, arc: 2.4, bossOnly: true },
+  boss_spiral:   { name: '魂旋弹幕', el: 'none', kind: 'shot', power: 54, mp: 0, cd: 8.5, count: 5, spread: 0.9, speed: 265, range: 500, spin: true, bossOnly: true },
+  boss_darkdash: { name: '浑沌冲撞', el: 'none', kind: 'dash', power: 128, mp: 0, cd: 6, dash: 300, range: 70, arc: 2.4, bossOnly: true },
   boss_summon:   { name: '唤魂', el: 'none', kind: 'summon', power: 0, mp: 0, cd: 18, summonSp: 'hunling', summonN: 2, bossOnly: true },
 
   /* --- 穷奇专属技（雪原守护者；bossOnly 红线） --- */
@@ -149,9 +162,105 @@ var SKILLS = {
 
   /* --- 烛龙专属技（归墟终焉守护者；bossOnly 红线） --- */
   boss_daynight: { name: '昼夜轮转', el: 'fire', kind: 'aoe', power: 108, mp: 0, cd: 8, radius: 160, status: ['burn', 0.4], bossOnly: true },
-  boss_voidspiral: { name: '虚界星旋', el: 'none', kind: 'shot', power: 78, mp: 0, cd: 7.5, count: 6, spread: 0.9, speed: 300, range: 520, spin: true, bossOnly: true },
-  boss_timedevour: { name: '噬时之咬', el: 'fire', kind: 'dash', power: 120, mp: 0, cd: 6, dash: 300, range: 72, arc: 2.4, status: ['burn', 0.4], bossOnly: true },
+  boss_voidspiral: { name: '虚界星旋', el: 'none', kind: 'shot', power: 52, mp: 0, cd: 8.5, count: 6, spread: 0.9, speed: 265, range: 500, spin: true, bossOnly: true },
+  boss_timedevour: { name: '噬时之咬', el: 'fire', kind: 'dash', power: 96, mp: 0, cd: 6, dash: 300, range: 72, arc: 2.4, status: ['burn', 0.4], bossOnly: true },
   boss_starfall2: { name: '焚天星陨', el: 'fire', kind: 'rain', power: 54, mp: 0, cd: 11, radius: 125, waves: 5, count: 3, duration: 2.6, status: ['burn', 0.3], bossOnly: true }
+};
+
+/* ---------------- 技能修炼（灵纹系统） ----------------
+   每级基础成长：伤害 +6%、冷却 -5%（对 buff 则持续 +8%）
+   升到 3 级时二选一「道途」，之后每级沿道途额外成长；5 级满阶。
+   灵纹：升级获得（每级 1 枚），在角色-技能页消耗修炼。 */
+var SKILL_MAX_LV = 5;
+var SKILL_PATHS = {
+  A: { name: '力量', perPower: 0.07, lv3Status: 0.10, lv5Crit: 0.06,
+       desc: '每级伤害再 +7%；3 级起异常触发率 +10%；满阶技能暴击率 +6%' },
+  B: { name: '迅捷', perCd: 0.09, perRange: 0.08, lv5Mp: 0.30,
+       desc: '每级冷却再 -9%、射程/范围 +8%；满阶耗魔 -30%' }
+};
+/* 现算修炼后的技能（玩家专用；pet/mob 一律用 SKILLS 原始值） */
+function skillUpgradeDef(sid, lv, path) {
+  var sk = SKILLS[sid];
+  if (!sk || !lv || lv <= 1) return sk;
+  var o = {};
+  for (var k in sk) o[k] = sk[k];
+  var lvUp = lv - 1;
+  o.power = Math.round(sk.power * (1 + 0.06 * lvUp) * 100) / 100;
+  o.cd = Math.round(sk.cd * (1 - 0.05 * lvUp) * 100) / 100;
+  if (sk.kind === 'buff' && sk.buff) {
+    var nb = {};
+    for (var bk in sk.buff) nb[bk] = bk === 'dur' ? Math.round(sk.buff.dur * (1 + 0.08 * lvUp) * 10) / 10 : sk.buff[bk];
+    o.buff = nb;
+  }
+  var P = path && SKILL_PATHS[path] ? SKILL_PATHS[path] : null;
+  if (P && lv >= 3) {
+    if (P.perPower) o.power = Math.round(o.power * (1 + P.perPower * (lv - 2)) * 100) / 100;
+    if (P.perCd) o.cd = Math.round(o.cd * (1 - P.perCd * (lv - 2)) * 100) / 100;
+    if (P.perRange) {
+      if (o.range) o.range = Math.round(o.range * (1 + P.perRange * (lv - 2)));
+      if (o.radius) o.radius = Math.round(o.radius * (1 + P.perRange * (lv - 2)));
+      if (o.cast) o.cast = Math.round(o.cast * (1 + P.perRange * (lv - 2) * 0.5));
+    }
+    if (P.lv5Crit && lv >= 5) o.critBonus = (o.critBonus || 0) + P.lv5Crit;
+    if (P.lv5Mp && lv >= 5) o.mp = Math.round(o.mp * (1 - P.lv5Mp));
+    if (P.lv3Status && o.status) o.status = [o.status[0], Math.min(0.95, o.status[1] + P.lv3Status)];
+  }
+  o.lv = lv; o.path = path || null;
+  return o;
+}
+/* 修炼后技能的差异摘要（面板用；返回字符串数组） */
+function skillUpgradeNotes(sid, lv, path) {
+  var base = SKILLS[sid], cur = skillUpgradeDef(sid, lv, path);
+  var out = [];
+  if (cur.power !== base.power) out.push('伤害 ' + base.power + '% → ' + cur.power + '%');
+  if (cur.cd !== base.cd) out.push('冷却 ' + base.cd + 's → ' + cur.cd + 's');
+  if (cur.mp !== base.mp) out.push('耗魔 ' + base.mp + ' → ' + cur.mp);
+  if (cur.range && cur.range !== base.range) out.push('射程 ' + base.range + ' → ' + cur.range);
+  if (cur.radius && cur.radius !== base.radius) out.push('范围 ' + base.radius + ' → ' + cur.radius);
+  if (cur.status && base.status && cur.status[1] !== base.status[1]) out.push((STATUS[cur.status[0]] ? STATUS[cur.status[0]].name : '异常') + '率 ' + Math.round(base.status[1] * 100) + '% → ' + Math.round(cur.status[1] * 100) + '%');
+  if (cur.critBonus) out.push('技能暴击率 +' + Math.round(cur.critBonus * 100) + '%');
+  if (cur.buff && base.buff && cur.buff.dur !== base.buff.dur) out.push('持续 ' + base.buff.dur + 's → ' + cur.buff.dur + 's');
+  return out;
+}
+
+/* ---------------- 合成配方（灵医·白芷 炼制） ---------------- */
+var RECIPES = [
+  { id: 'r_huichun', out: ['huichun', 2], need: [['yaocao', 2]], gold: 20 },
+  { id: 'r_dahun',   out: ['dahun', 1],   need: [['yaocao', 3], ['lingsha', 2]], gold: 80 },
+  { id: 'r_ningshen',out: ['ningshen', 2],need: [['lingsha', 2]], gold: 24 },
+  { id: 'r_shenquan',out: ['shenquan', 1],need: [['lingsha', 4], ['yaocao', 2]], gold: 90 },
+  { id: 'r_fusuo',   out: ['fusuo', 2],   need: [['lingsha', 2], ['shougu', 1]], gold: 24 },
+  { id: 'r_chijing', out: ['chijing', 1], need: [['xuantie', 1], ['lingsha', 3]], gold: 100 },
+  { id: 'r_yin',     out: ['shanhaiyin', 1], need: [['xuantie', 3], ['leiguang', 1]], gold: 380 },
+  { id: 'r_fufu',    out: ['chuansongfu', 2], need: [['lingsha', 2], ['yaocao', 1]], gold: 24 },
+  { id: 'r_lingguo', out: ['lingguo', 2],need: [['yaocao', 2], ['lingsha', 1]], gold: 30 },
+  { id: 'r_pei3',    out: ['pei3'],      need: [['xuantie', 4], ['leiguang', 2]], gold: 900 },
+  { id: 'r_fu3',     out: ['fu3'],       need: [['xuantie', 4], ['bingpo', 2]], gold: 900 },
+  { id: 'r_mao3',    out: ['mao3'],      need: [['xuantie', 4], ['huohuanyu', 2]], gold: 900 }
+];
+
+/* ---------------- 采集点（走近按 F 采集，采完渐次刷新） ---------------- */
+var GATHER_DEFS = {
+  herb:    { name: '药草丛', item: 'yaocao', n: [2, 3], sprite: 'herbnode', gold: [2, 6] },
+  sandvein:{ name: '灵砂脉', item: 'lingsha', n: [2, 3], sprite: 'orenode', c: '#d8c890', gold: [3, 7] },
+  ironvein:{ name: '玄铁矿', item: 'xuantie', n: [1, 2], sprite: 'orenode', c: '#78909c', gold: [4, 9] },
+  emberherb:{name: '火绒草', item: 'huohuanyu', n: [1, 2], sprite: 'herbnode', c: '#f07040', gold: [4, 9] },
+  sparkcrystal: { name: '雷光晶簇', item: 'leiguang', n: [1, 2], sprite: 'crystalnode', c: '#ffd740', gold: [5, 10] },
+  icecluster: { name: '冰晶簇', item: 'bingpo', n: [1, 2], sprite: 'crystalnode', c: '#8fe0f0', gold: [5, 10] },
+  goldsand:{ name: '流金沙窝', item: 'shajin', n: [1, 2], sprite: 'sandnode', gold: [5, 11] },
+  voidfern:{ name: '虚壤灵草', item: 'lingsha', n: [2, 4], sprite: 'herbnode', c: '#b0a0e8', gold: [5, 10] }
+};
+/* 各主题刷哪些采集点：[[kind, 权重], ...] */
+var GATHER_THEMES = {
+  grass:   [['herb', 5], ['sandvein', 3]],
+  forest:  [['herb', 5], ['sandvein', 2], ['ironvein', 2]],
+  volcano: [['emberherb', 4], ['ironvein', 4]],
+  cave:    [['ironvein', 4], ['sparkcrystal', 3], ['sandvein', 2]],
+  marsh:   [['sparkcrystal', 4], ['herb', 3], ['ironvein', 2]],
+  snow:    [['icecluster', 4], ['ironvein', 3]],
+  peach:   [['herb', 5], ['sandvein', 3]],
+  desert:  [['goldsand', 4], ['ironvein', 3], ['herb', 1]],
+  abyss:   [['voidfern', 4], ['icecluster', 2], ['sparkcrystal', 2]]
 };
 
 /* ---------------- 灵物种族（山海经） ----------------
@@ -369,7 +478,7 @@ var SPECIES = {
 
   /* —— 守护者（不可捕捉，图鉴凭击败收录） —— */
   bifang: {
-    name: '毕方', el: 'fire', rare: 5, base: { hp: 130, atk: 17, def: 10, spd: 118 }, catch: 0, exp: 90, boss: true,
+    name: '毕方', el: 'fire', rare: 5, base: { hp: 130, atk: 15, def: 10, spd: 118 }, catch: 0, exp: 90, boss: true,
     desc: '见则其邑有讹火。独足青羽的炎之守护者。',
     art: { arch: 'bird', c1: '#e05840', c2: '#b03020', c3: '#7c1e12', feat: ['oneLeg', 'crest', 'wings', 'fireAura'] },
     skills: [[1, 'boss_flamefan'], [1, 'boss_skyfall']]
@@ -387,7 +496,7 @@ var SPECIES = {
     skills: [[1, 'boss_dive'], [1, 'boss_gale'], [1, 'boss_tornado']]
   },
   dijiang: {
-    name: '帝江', el: 'none', rare: 5, base: { hp: 210, atk: 23, def: 15, spd: 120 }, catch: 0, exp: 320, boss: true,
+    name: '帝江', el: 'none', rare: 5, base: { hp: 210, atk: 20, def: 15, spd: 120 }, catch: 0, exp: 320, boss: true,
     desc: '识歌舞，浑敦无面目。雷泽深处的终焉守护者。',
     art: { arch: 'wisp', c1: '#e8c860', c2: '#c09838', c3: '#8c6c1e', feat: ['chaos', 'fourWing'] },
     skills: [[1, 'boss_chaosring'], [1, 'boss_spiral'], [1, 'boss_darkdash'], [1, 'boss_summon']]
@@ -411,7 +520,7 @@ var SPECIES = {
     skills: [[1, 'waterpulse'], [12, 'tide']]
   },
   zhulong: {
-    name: '烛龙', el: 'fire', rare: 5, base: { hp: 300, atk: 24, def: 19, spd: 124 }, catch: 0, exp: 640, boss: true,
+    name: '烛龙', el: 'fire', rare: 5, base: { hp: 300, atk: 21, def: 19, spd: 124 }, catch: 0, exp: 640, boss: true,
     desc: '钟山之神，视为昼，瞑为夜，吹为冬，呼为夏。归墟之底的终焉之影。',
     art: { arch: 'serpent', c1: '#d05840', c2: '#a03428', c3: '#601c14', feat: ['goldHorn', 'fireAura', 'storm'] },
     skills: [[1, 'boss_daynight'], [1, 'boss_voidspiral'], [1, 'boss_timedevour'], [1, 'boss_starfall2']]
@@ -442,7 +551,7 @@ function petStat(spRec) {
   var ivM = 1 + (spRec.iv || 0) * 0.012;            /* 资质 0~15 → ×1.00~1.18 */
   var tp = TEMPERS[spRec.temper] || { stats: {} };
   var t = function (k) { return 1 + (tp.stats[k] || 0); };
-  var g = 1 + (lv - 1) * 0.115;
+  var g = 1 + (lv - 1) * 0.145;   /* 御灵羁绊：略追平野怪 0.16 的成长，高资质/性格可反超 */
   return {
     hp: Math.round(sp.base.hp * g * ivM * t('hp')),
     atk: Math.round(sp.base.atk * g * ivM * t('atk') * 10) / 10,
@@ -461,10 +570,11 @@ var SHINY_RATE = 1 / 90, SHINY_MUL = 1.28;
 /* ---------------- 道具 ---------------- */
 var ITEMS = {
   /* 消耗 */
-  huichun:   { name: '回春散', type: 'use', heal: 60,  price: 30,  icon: 'potion', color: '#e05656', desc: '回复 60 点生命' },
-  dahun:     { name: '大还丹', type: 'use', heal: 180, price: 110, icon: 'potion', color: '#d0342c', desc: '回复 180 点生命' },
+  huichun:   { name: '回春散', type: 'use', healPct: 0.30, price: 30,  icon: 'potion', color: '#e05656', desc: '回复 30% 生命' },
+  dahun:     { name: '大还丹', type: 'use', healPct: 0.65, price: 110, icon: 'potion', color: '#d0342c', desc: '回复 65% 生命' },
   ningshen:  { name: '凝神露', type: 'use', mana: 50,  price: 32,  icon: 'mpotion', color: '#4f8fd8', desc: '回复 50 点魔力' },
   shenquan:  { name: '神泉水', type: 'use', mana: 130, price: 115, icon: 'mpotion', color: '#2f6fc0', desc: '回复 130 点魔力' },
+  lingguo:   { name: '灵果', type: 'use', petHeal: 0.4, revivePct: 0.5, price: 45, icon: 'herb', color: '#f0c060', desc: '出战灵宠回复 40% 生命；濒死灵宠立即以 50% 生命归队' },
   /* 捕捉 */
   fusuo:     { name: '缚灵索', type: 'ball', mul: 1.0, price: 60,  icon: 'rope', color: '#c8b490', desc: '投掷捕捉野生灵物（基础）' },
   chijing:   { name: '赤晶索', type: 'ball', mul: 1.75, price: 180, icon: 'rope', color: '#e07040', desc: '捕捉率 ×1.75 的缚灵索' },
@@ -545,7 +655,7 @@ var WT_NAME = { sword: '剑', staff: '杖', bow: '弓' };
 
 /* 强化：+1..+6，每级 +8% 基础数值（生命取 8%），费用递增 */
 var PLUS_MUL = [0, 0.08, 0.16, 0.24, 0.32, 0.40, 0.48];
-function plusCost(def, plus) { return { xuantie: plus + 1, gold: def.price > 0 ? Math.round(def.price * 0.25 * (plus + 1)) : 200 * (plus + 1) }; }
+function plusCost(def, plus) { return { xuantie: plus + 1, gold: def.price > 0 ? Math.round(def.price * 0.16 * (plus + 1)) : 200 * (plus + 1) }; }
 function equipStats(def, plus) {
   var m = 1 + (PLUS_MUL[plus] || 0);
   var st = {};
@@ -564,6 +674,7 @@ var MAPS = {
     portals: [
       { x: 39, y: 17, to: 'qingqiu', tx: 4, ty: 17, label: '青丘泽' }
     ],
+    board: { x: 22, y: 15 },
     npcs: [
       { id: 'elder', name: '村长·姜石', x: 20, y: 12, role: 'quest', face: 'elder', lines: '主线委托' },
       { id: 'shopper', name: '杂货商·幺妹', x: 14, y: 19, role: 'shop', face: 'shopper', lines: '买点啥子？' },
@@ -593,10 +704,10 @@ var MAPS = {
   ruomu: {
     name: '若木林', theme: 'forest', w: 64, h: 46, seed: 20260903, lv: [6, 12], maxMob: 13,
     spawn: [['huoshu', 6, 10, 24], ['changyou', 6, 11, 22], ['quru', 7, 12, 20], ['boyi', 8, 12, 16], ['jiuweihu', 9, 12, 4], ['lili', 6, 9, 14]],
-    boss: { sp: 'bifang', lv: 12, hpMul: 11, respawn: 120, drop: [['huohuanyu', 2], ['dahun', 2]] },
+    boss: { sp: 'bifang', lv: 12, hpMul: 9, respawn: 120, drop: [['huohuanyu', 2], ['dahun', 2]] },
     portals: [
       { x: 3, y: 22, to: 'qingqiu', tx: 56, ty: 21, label: '青丘泽' },
-      { x: 60, y: 16, to: 'yanbo', tx: 4, ty: 24, label: '炎波火泽', needLv: 11 }
+      { x: 58, y: 34, to: 'yanbo', tx: 4, ty: 24, label: '炎波火泽', needLv: 11 }
     ],
     npcs: [{ id: 'caiyao', name: '采药人·杜蘅', x: 18, y: 10, role: 'quest', face: 'herbalist', lines: '林子深处的雾有毒。' }]
   },
@@ -653,7 +764,7 @@ var MAPS = {
   guixu: {
     name: '归墟', theme: 'abyss', w: 58, h: 42, seed: 20260910, lv: [32, 36], maxMob: 12, dark: true,
     spawn: [['kun', 32, 36, 16], ['xuekui', 32, 35, 14], ['tushanjun', 32, 34, 12], ['kui', 32, 35, 10], ['yuxiong', 32, 34, 10]],
-    boss: { sp: 'zhulong', lv: 36, hpMul: 30, respawn: 360, drop: [['shanhaiyin', 3], ['bingpo', 3]] },
+    boss: { sp: 'zhulong', lv: 36, hpMul: 18, respawn: 360, drop: [['shanhaiyin', 3], ['bingpo', 3]] },
     portals: [
       { x: 30, y: 38, to: 'beiming', tx: 10, ty: 40, label: '北冥雪原' }
     ],
@@ -676,10 +787,10 @@ var QUESTS = [
     after: "结契不是驯服，是相互点头。从今天起，你不是一个人在山海之间走了。" },
   { id: 'm3', main: true, giver: 'lingyu', giverMap: 'village', name: '拾遗青丘', lv: 3, prev: 'm2',
     text: '青丘泽的狸力与旋龟最适合初学御灵。捕捉一只狸力或一只旋龟。',
-    goal: { type: 'captureOne', sp: ['lili', 'xuangui'], n: 1 }, reward: { gold: 200, exp: 130, items: [['yaocao', 3]] },
+    goal: { type: 'captureOne', sp: ['lili', 'xuangui'], n: 1 }, reward: { gold: 320, exp: 130, items: [['xuantie', 3], ['yaocao', 2]] },
     after: "好眼力。开头顺了，后面的路再长，也不过是把这个道理走到更远的地方。" },
   { id: 'm4', main: true, giver: 'elder', giverMap: 'village', name: '若木之影', lv: 8, prev: 'm3',
-    text: '若木林深处有独足火鸟毕方作祟，青羽过处，讹火四起。请击败守护者·毕方。',
+    text: '若木林深处有独足火鸟毕方作祟，青羽过处，讹火四起。请击败守护者·毕方。（它是第一头真守护者——先去铁匠石敢当处换把玄铁武器，多备两瓶大还丹）',
     goal: { type: 'boss', map: 'ruomu', n: 1 }, reward: { gold: 600, exp: 500, items: [['chijing', 3]] },
     after: "毕方折羽，讹火熄了。若木林的雾散开那天，姜石在村口等你到很晚。" },
   { id: 'm5', main: true, giver: 'elder', giverMap: 'village', name: '炎波之心', lv: 13, prev: 'm4',
@@ -733,7 +844,7 @@ var QUESTS = [
   { id: 's10', side: true, giver: 'lieren', giverMap: 'beiming', name: '不化之冰', lv: 26,
     text: '冰魄是打制寒铁的好料子。给白罴带回 6 块冰魄，他拿祖传的雪罴皮裘跟你换。',
     goal: { type: 'item', item: 'bingpo', n: 6 }, reward: { gold: 1700, exp: 1500, items: [['dahun', 3], ['chijing', 5]] } },
-  { id: 'm10', main: true, giver: 'elder', giverMap: 'village', name: '归墟之底', lv: 31, prev: 'm9',
+  { id: 'm10', main: true, giver: 'elder', giverMap: 'village', name: '归墟之底', lv: 32, prev: 'm9',
     text: '北冥之北有归墟，万水之所归——烛龙蛰伏其间，视为昼，瞑为夜。若它睁眼，山海将再无黑夜。请前往归墟，击败终焉之影·烛龙。',
     goal: { type: 'boss', map: 'guixu', n: 1 }, reward: { gold: 6800, exp: 9000, items: [['shanhaiyin', 4], ['dahun', 4]] },
     after: '烛龙合上了眼。昼与夜各归其位，万水在归墟深处安静地打着旋。你把烛龙之睛握在手心——那不是战利品，是山海托付给你的目光。旅程结束了，而图经才刚刚写满第一卷。' },
@@ -928,7 +1039,7 @@ var SHOP_STOCK = ['huichun', 'dahun', 'ningshen', 'shenquan', 'fusuo', 'chijing'
 var SMITH_STOCK = ['jian1', 'jian2', 'jian3', 'jian4', 'zhang1', 'zhang2', 'zhang3', 'zhang4', 'gong1', 'gong2', 'gong3', 'gong4', 'yi1', 'yi2', 'yi3', 'yi4', 'mao1', 'mao2', 'mao3', 'mao4', 'xue1', 'xue2', 'xue3', 'xue4', 'pei1', 'pei2', 'pei3', 'pei4', 'fu1', 'fu2', 'fu3', 'fu4'];
 
 /* 行脚商（随机事件）货单：比村里多一档 */
-var CARAVAN_STOCK = ['jian3', 'zhang3', 'gong3', 'yi3', 'mao3', 'xue3', 'pei3', 'fu3', 'jian4', 'zhang4', 'gong4', 'yi4', 'mao4', 'xue4', 'pei4', 'fu4', 'shanhaiyin', 'dahun', 'shenquan'];
+var CARAVAN_STOCK = ['jian3', 'zhang3', 'gong3', 'yi3', 'mao3', 'xue3', 'pei3', 'fu3', 'jian4', 'zhang4', 'gong4', 'yi4', 'mao4', 'xue4', 'pei4', 'fu4', 'shanhaiyin', 'dahun', 'shenquan', 'lingguo', 'leiguang', 'bingpo', 'shajin'];
 
 /* ---------------- 掉落表（按地图主题） ---------------- */
 var MAT_DROPS = {

@@ -19,6 +19,11 @@ var UI = {
     document.addEventListener('keydown', function (e) {
       var tag = e.target && e.target.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.code === 'F11') {
+        e.preventDefault();
+        Game.toggleFullscreen();
+        return;
+      }
       if (e.code === 'Escape' || e.code === 'Tab') {
         e.preventDefault();
         if (self.open === 'title' || self.open === 'ending' || self.open === 'prologue') return;   /* 序章有自己的翻页键 */
@@ -93,12 +98,12 @@ var UI = {
       '<div class="title-logo">山海拾灵</div>' +
       '<div class="title-sub">— 御灵 · 山海 · 行 —</div>' +
       '<div class="title-cards">' + cards + '</div>' +
-      '<div class="title-row"><input id="nameInput" maxlength="6" placeholder="你的名字（最多6字）" value="' + (Game.player ? Game.player.name : '') + '"></div>' +
+      '<div class="title-row"><input id="nameInput" maxlength="6" placeholder="你的名字（最多6字）" value="' + (Game.player ? String(Game.player.name).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') : '') + '"></div>' +
       '<div class="title-row">' +
       '<button class="btn big" data-act="start">启程</button>' +
       (hasSave ? '<button class="btn big ghost" data-act="continue">继续旅程</button>' : '') +
       '</div>' +
-      '<div class="title-help">WASD 移动 · 鼠标左键攻击 · 1-4 技能 · E 捕捉 · F 对话/传送 · Q/R 喝药 · B 背包 · P 灵宠 · J 委托 · C 角色 · M 图鉴</div>' +
+      '<div class="title-help">WASD 移动 · 左键攻击 · 1-6 技能 · E 捕捉 · F 对话/采集 · Q/R 喝药 · T 自动战斗 · H 灵宠战术 · K 技能修炼 · B/P/J/C/M 面板 · F11 全屏</div>' +
       '</div>';
     this.$overlay.classList.add('show');
   },
@@ -108,7 +113,7 @@ var UI = {
     this.$hud.classList.remove('hidden');
     var sb = document.getElementById('skillBar');
     sb.innerHTML = '';
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 6; i++) {
       var d = document.createElement('div');
       d.className = 'skill-slot';
       d.innerHTML = '<div class="sk-cd"></div><span class="sk-key"></span><span class="sk-name"></span>';
@@ -144,24 +149,24 @@ var UI = {
       port._cls = P.cls;
       port.style.background = 'url(' + Sprites.playerCv(P.cls, P.tier(), 0, false).toDataURL() + ') center/contain no-repeat';
     }
-    /* 技能栏 */
+    /* 技能栏（普攻 + 1~6） */
     var skills = P.skills();
     var sb = this._el('skillBar');
-    for (var i = 0; i < 4; i++) {
+    for (var i = 0; i < 6; i++) {
       var slot = sb.children[i];
       if (!slot) break;
-      var sid = skills[i];
+      var sid = skills[i + 1];               /* [0] 是普攻，走左键 */
       if (slot._sid !== sid) {
         slot._sid = sid;
-        var sk = SKILLS[sid];
+        var sk = sid ? P.effSkill(sid) : null;
         slot.querySelector('.sk-name').textContent = sk ? sk.name : '';
         slot.querySelector('.sk-key').textContent = (i + 1);
-        slot.title = sk ? (sk.name + '：' + (sk.desc || '') + (sk.mp ? '（' + sk.mp + ' MP）' : '')) : '';
+        slot.title = sk ? (sk.name + (sk.lv > 1 ? ' Lv.' + sk.lv + (sk.path ? '·' + SKILL_PATHS[sk.path].name : '') : '') + '：' + (sk.desc || '') + (sk.mp ? '（' + sk.mp + ' MP）' : '') + '　K 键修炼') : '';
         var elc = sk && sk.el !== 'none' ? ELEMENTS[sk.el].color : '#cfd8dc';
         slot.style.background = U.rgba(elc, 0.18);
       }
       var cd = sid ? (P.cd[sid] || 0) : 0;
-      var maxCd = sid ? SKILLS[sid].cd : 1;
+      var maxCd = sid ? (P.effSkill(sid).cd || 1) : 1;
       slot.querySelector('.sk-cd').style.height = (cd > 0 ? U.clamp(cd / maxCd * 100, 0, 100) : 0) + '%';
       slot.classList.toggle('oncd', cd > 0);
       /* 冷却剩余秒数直接标在键位上 */
@@ -180,7 +185,9 @@ var UI = {
     qb.title = '缚灵索 ×' + (Game.bag.fusuo || 0) + '　赤晶索 ×' + (Game.bag.chijing || 0) + '　山海印 ×' + (Game.bag.shanhaiyin || 0);
     /* 灵宠栏 */
     var hudPets = this._el('hudPets');
-    var key = Game.pets.map(function (p) { return p.rec.uid + ':' + p.rec.lv + ':' + (p.downT > 0 ? 1 : 0); }).join('|') + '#' + Game.petMode;
+    var key = Game.pets.map(function (p) {
+      return p.rec.uid + ':' + p.rec.lv + ':' + (p.downT > 0 ? 1 : 0) + ':' + Math.round(U.clamp(p.hp / p.st.hp, 0, 1) * 20);
+    }).join('|') + '#' + Game.petMode;
     if (hudPets._key !== key) {
       hudPets._key = key;
       var html = Game.pets.map(function (p) {
@@ -194,23 +201,34 @@ var UI = {
       if (!Game.pets.length) html = '<div class="pet-chip none">无出战灵宠（P 键编队）</div>';
       hudPets.innerHTML = html;
     }
-    /* 模式芯片 */
-    this._el('petMode').innerHTML = (Game.resonance ? '<b class="reso">✦共鸣</b>　' : '') + '灵宠：<b data-act="cyclePetMode">' +
-      { attack: '进攻', defend: '防守', follow: '跟随' }[Game.petMode] + '</b>　|　自动：<b data-act="cycleAuto">' + (P.auto ? '开' : '关') + '</b>';
-    /* BOSS 倒计时 */
+    /* 模式芯片 / BOSS 倒计时 / 事件条：内容变化才重写 innerHTML（别每帧动 DOM） */
+    var pmKey = (Game.resonance ? 1 : 0) + Game.petMode + (P.auto ? 1 : 0);
+    var pmEl = this._el('petMode');
+    if (pmEl._k !== pmKey) {
+      pmEl._k = pmKey;
+      pmEl.innerHTML = (Game.resonance ? '<b class="reso">✦共鸣</b>　' : '') + '灵宠：<b data-act="cyclePetMode">' +
+        { attack: '进攻', defend: '防守', follow: '跟随' }[Game.petMode] + '</b>　|　自动：<b data-act="cycleAuto">' + (P.auto ? '开' : '关') + '</b>';
+    }
     var bt = this._el('bossTimer');
     var bs = Game.bossState[Game.map.id];
-    if (Game.map.def.boss && bs && !bs.alive) {
-      bt.style.display = '';
-      bt.innerHTML = '◆ ' + SPECIES[Game.map.def.boss.sp].name + ' 重生：' + U.timeText(bs.t);
-    } else bt.style.display = 'none';
-    /* 事件条 */
+    var btKey = (Game.map.def.boss && bs && !bs.alive) ? Math.ceil(bs.t) : -1;
+    if (bt._k !== btKey) {
+      bt._k = btKey;
+      if (btKey >= 0) {
+        bt.style.display = '';
+        bt.innerHTML = '◆ ' + SPECIES[Game.map.def.boss.sp].name + ' 重生：' + U.timeText(bs.t);
+      } else bt.style.display = 'none';
+    }
     var et = this._el('eventTrack');
-    if (Game.event) {
-      et.style.display = '';
-      var names = { migration: '✨ 灵物迁徙', frenzy: '⚠ 兽潮涌动', caravan: '🛒 行脚商队', treasure: '💰 藏宝现世' };
-      et.innerHTML = names[Game.event.type] + '　<em>' + Math.ceil(Game.event.t) + 's</em>';
-    } else et.style.display = 'none';
+    var etKey = Game.event ? Game.event.type + ':' + Math.ceil(Game.event.t) : '';
+    if (et._k !== etKey) {
+      et._k = etKey;
+      if (Game.event) {
+        et.style.display = '';
+        var names = { migration: '✨ 灵物迁徙', frenzy: '⚠ 兽潮涌动', caravan: '🛒 行脚商队', treasure: '💰 藏宝现世' };
+        et.innerHTML = names[Game.event.type] + '　<em>' + Math.ceil(Game.event.t) + 's</em>';
+      } else et.style.display = 'none';
+    }
     /* 委托追踪（最多 3 行，更多折叠，避免顶到 BOSS 倒计时） */
     var qt = this._el('questTrack');
     var qh = '', shownN = 0, hiddenN = 0;
@@ -234,6 +252,11 @@ var UI = {
       } else hiddenN++;
     });
     if (hiddenN > 0) qh += '<div class="qt-line dim">…还有 ' + hiddenN + ' 项（J 查看）</div>';
+    if (Game.bounty) {
+      var b = Game.bounty;
+      qh += '<div class="qt-line' + (b.p >= b.n ? ' ready' : '') + '">⛏ 猎告：' + SPECIES[b.sp].name +
+        ' <em>' + Math.min(b.p, b.n) + '/' + b.n + (b.p >= b.n ? ' ✔可领赏' : '') + '</em></div>';
+    }
     if (!qh) qh = '<div class="qt-line dim">暂无进行中的委托</div>';
     if (qt._h !== qh) { qt._h = qh; qt.innerHTML = qh; }
   },
@@ -245,7 +268,11 @@ var UI = {
       if (!first && Game.bag[i] > 0) first = ITEMS[i];
     });
     el.querySelector('.sk-name').textContent = total > 0 ? total : '—';
-    el.classList.toggle('oncd', total <= 0);
+    /* 药力冷却遮罩（与技能栏一致的视觉口径） */
+    var cdEl = el.querySelector('.sk-cd');
+    var cd = (Game.player.itemCd || 0);
+    if (cdEl) cdEl.style.height = (cd > 0 ? U.clamp(cd / 1.2 * 100, 0, 100) : 0) + '%';
+    el.classList.toggle('oncd', total <= 0 || cd > 0);
     el.title = first ? first.name + '（' + first.desc + '）' : '没有药水';
   },
   usePotion: function (type) {
@@ -270,8 +297,8 @@ var UI = {
   },
   renderMenu: function () {
     var tabs = [
-      ['char', '角色(C)'], ['bag', '背包(B)'], ['spirit', '灵宠(P)'],
-      ['dex', '图鉴(D)'], ['quest', '委托(J)'], ['sys', '系统']
+      ['char', '角色(C)'], ['skill', '技能(K)'], ['bag', '背包(B)'], ['spirit', '灵宠(P)'],
+      ['dex', '图鉴(M)'], ['quest', '委托(J)'], ['sys', '系统']
     ];
     var body = this['tab_' + this.menuTab]();
     this.$overlay.innerHTML =
@@ -302,7 +329,9 @@ var UI = {
     }).join('');
     var skills = P.skills().map(function (sid, i) {
       var sk = SKILLS[sid];
-      return '<div class="sk-row"><b>' + (i + 1) + ' ' + sk.name + '</b>' +
+      var st = P.skill[sid];
+      var lvTxt = st && st.lv > 1 ? '　<b class="gold">Lv.' + st.lv + (st.path ? '·' + SKILL_PATHS[st.path].name : '') + '</b>' : '';
+      return '<div class="sk-row"><b>' + (i === 0 ? '左键' : i) + ' ' + sk.name + lvTxt + '</b>' +
         '<span class="el-tag" style="color:' + (sk.el !== 'none' ? ELEMENTS[sk.el].color : '#cfd8dc') + '">' + (sk.el !== 'none' ? ELEMENTS[sk.el].name : '无') + '</span>' +
         '<span>' + (sk.desc || '') + '</span></div>';
     }).join('');
@@ -322,10 +351,59 @@ var UI = {
       '<div class="sec-title">装备（点击卸下）</div>' +
       '<div class="eq-grid">' + slots + '</div>' +
       '</div><div class="col">' +
-      '<div class="sec-title">技能</div>' + skills +
+      '<div class="sec-title">技能（K 键修炼升级）</div>' + skills +
       '<div class="sec-title">成就（' + Object.keys(Game.achv).length + '/' + ACHIEVEMENTS.length + '）</div>' +
       '<div class="achv-list">' + achv + '</div>' +
       '</div></div>';
+  },
+
+  /* ---------- 技能修炼 ---------- */
+  tab_skill: function () {
+    var P = Game.player;
+    var cls = CLASSES[P.cls];
+    var rows = cls.skills.map(function (pair) {
+      var unlockLv = pair[0], sid = pair[1];
+      var learned = P.lv >= unlockLv;
+      var st = P.skill[sid] || { lv: 1, path: null };
+      var sk = SKILLS[sid];
+      var eff = learned ? P.effSkill(sid) : sk;
+      var locked = !learned ? '<span class="tag">Lv.' + unlockLv + ' 解锁</span>' : '';
+      var lvDots = '';
+      for (var d = 1; d <= SKILL_MAX_LV; d++) lvDots += d <= st.lv ? '◆' : '◇';
+      var notes = (learned && st.lv > 1) ? skillUpgradeNotes(sid, st.lv, st.path).join('　') : '尚未修炼（基础数值）';
+      var statLine = (sk.power ? '伤害 ' + eff.power + '%' : (eff.buff ? '增益 ' + Object.keys(eff.buff).filter(function (k) { return k !== 'dur'; }).map(function (k) {
+        return ({ atk: '攻', def: '防', spd: '速' }[k] || k) + '+' + Math.round(eff.buff[k] * 100) + '%';
+      }).join(' ') + ' 持续 ' + eff.buff.dur + 's' : '')) +
+        (sk.mp ? '　耗魔 ' + eff.mp : '') + '　冷却 ' + eff.cd + 's' +
+        (eff.range ? '　射程 ' + eff.range : '') + (eff.radius ? '　范围 ' + eff.radius : '');
+      var btn = '';
+      if (learned && st.lv < SKILL_MAX_LV) {
+        if (st.lv === 2 && !st.path) {
+          btn = '<div class="skup-row">' +
+            '<button class="btn xs" data-act="skillUp" data-arg="' + sid + ':A"' + (P.skillPts < 1 ? ' disabled' : '') + '>力量道途（+1）</button>' +
+            '<button class="btn xs" data-act="skillUp" data-arg="' + sid + ':B"' + (P.skillPts < 1 ? ' disabled' : '') + '>迅捷道途（+1）</button></div>';
+        } else {
+          btn = '<button class="btn xs" data-act="skillUp" data-arg="' + sid + ':' + (st.path || '') + '"' + (P.skillPts < 1 ? ' disabled' : '') + '>修炼 +1（灵纹×1）</button>';
+        }
+      } else if (learned) {
+        btn = '<span class="tag gold">已满阶</span>';
+      }
+      var pathDesc = st.path ? '<div class="dim">道途·' + SKILL_PATHS[st.path].name + '：' + SKILL_PATHS[st.path].desc + '</div>' : '';
+      return '<div class="skill-up' + (learned ? '' : ' locked') + '">' +
+        '<div class="sku-head"><b>' + sk.name + '</b><span class="lv-dots">' + lvDots + '</span>' + locked + '</div>' +
+        '<div class="dim">' + (sk.desc || '') + '</div>' +
+        '<div class="dim">' + statLine + '</div>' +
+        '<div class="dim">修炼增益：' + notes + '</div>' +
+        pathDesc + btn + '</div>';
+    }).join('');
+    var nextSkill = cls.skills.filter(function (pair) { return pair[0] > P.lv; })
+      .map(function (pair) { return SKILLS[pair[1]].name + '（Lv.' + pair[0] + '）'; })[0];
+    return '<div class="sec-title">职业被动 · ' + cls.passive.name + '</div>' +
+      '<div class="dim">' + cls.passive.desc + '</div>' +
+      '<div class="sec-title">灵纹：<b class="gold">' + P.skillPts + '</b> 枚（升级获得，用于技能修炼）</div>' +
+      '<div class="skill-list">' + rows + '</div>' +
+      (nextSkill ? '<div class="dim tip">下一技：' + nextSkill + '</div>' : '') +
+      '<div class="dim tip">修炼说明：每级伤害 +6%、冷却 -5%（增益持续 +8%）；升到 3 级时需在「力量 / 迅捷」两条道途中择一，此后沿该道途额外成长，5 级满阶。</div>';
   },
 
   /* ---------- 背包 ---------- */
@@ -457,6 +535,7 @@ var UI = {
     return '<div class="sys-col">' +
       '<button class="btn" data-act="save">保存进度（F5）</button>' +
       '<button class="btn" data-act="toggleSfx">音效：' + (SFX.on ? '开' : '关') + '</button>' +
+      '<button class="btn" data-act="fullscreen">全屏切换（F11）</button>' +
       '<button class="btn ghost" data-act="showExport">导出存档</button>' +
       '<button class="btn ghost" data-act="showImport">导入存档</button>' +
       '<button class="btn danger" data-act="toTitle">回到标题（自动保存）</button>' +
@@ -465,19 +544,23 @@ var UI = {
       '<div class="help-grid">' +
       '<span>WASD / 方向键</span><b>移动</b>' +
       '<span>鼠标左键 / 空格</span><b>普通攻击（朝准星）</b>' +
-      '<span>1 ~ 4</span><b>职业技能</b>' +
+      '<span>1 ~ 6</span><b>职业技能（升级解锁，共 7 招）</b>' +
       '<span>右键</span><b>点地移动</b>' +
-      '<span>E</span><b>投掷缚灵索捕捉</b>' +
-      '<span>F</span><b>对话 / 传送门</b>' +
+      '<span>E</span><b>投掷缚灵索捕捉（准星附近显示成功率）</b>' +
+      '<span>F</span><b>对话 / 传送门 / 采集 / 猎告牌</b>' +
       '<span>Q / R</span><b>血药 / 魔药</b>' +
       '<span>T</span><b>自动战斗开关</b>' +
       '<span>H</span><b>灵宠战术：进攻/防守/跟随</b>' +
-      '<span>B P J C M</span><b>背包 / 灵宠 / 委托 / 角色 / 图鉴</b>' +
+      '<span>B P J C K M</span><b>背包 / 灵宠 / 委托 / 角色 / 技能修炼 / 图鉴</b>' +
+      '<span>F11 / 全屏按钮</span><b>全屏（画面随窗口自适应）</b>' +
       '<span>Esc / Tab</span><b>系统菜单</b>' +
       '</div>' +
       '<div class="sec-title">属性克制</div>' +
       '<div class="dim">火→木→水→火　雷→风→土→雷（克制 ×1.5，被克 ×0.67，同属性 ×0.8）<br>' +
-      '连携：灼烧+风=爆燃 · 灼烧+雷=过载 · 滋毒+火=毒爆 · 麻痹+水=超导 · 缓流+土=潮陷</div>';
+      '连携：灼烧+风=爆燃 · 灼烧+雷=过载 · 滋毒+火=毒爆 · 麻痹+水=超导 · 缓流+土=潮陷</div>' +
+      '<div class="sec-title">营生</div>' +
+      '<div class="dim">赚钱：击败灵物 / 委托 / 猎告赏金（村口告示牌，无限接） / 采集点（药草丛·矿脉·晶簇，F 采集，可炼制可出售） / 藏宝事件 / 卖素材装备。<br>' +
+      '炼制：素材 → 丹药 / 缚灵索 / 装备（灵医·白芷）。灵纹：升级获得，K 键修炼技能，3 级选道途（力量/迅捷）。</div>';
   },
 
   /* ===================== 对话 ===================== */
@@ -489,7 +572,11 @@ var UI = {
     });
     QUESTS.forEach(function (q) {
       if (q.giver !== npcId) return;
-      if (q.main) return;
+      if (q.main) {
+        /* 进行中的主线给 '?'：提醒玩家回这儿交付 */
+        if (Game.quests[q.id]) canAccept = true;
+        return;
+      }
       if (!Game.quests[q.id] && !Game.questsDone[q.id] && Game.player.lv >= q.lv - 2) canAccept = true;
       if (Game.quests[q.id] && !Game.questsDone[q.id]) canAccept = true;
     });
@@ -520,7 +607,10 @@ var UI = {
     /* 角色功能 */
     if (npc.role === 'shop') opts.push({ act: 'shop', label: '看看货（买卖）' });
     if (npc.role === 'smith') opts.push({ act: 'smith', label: '打造与强化（铁匠铺）' });
-    if (npc.role === 'heal') opts.push({ act: 'healAll', label: '请帮我治疗（免费）' });
+    if (npc.role === 'heal') {
+      opts.push({ act: 'healAll', label: '请帮我治疗（免费，含灵宠）' });
+      opts.push({ act: 'craft', label: '炼制丹药与物件' });
+    }
     if (npcId === 'elder') opts.push({ act: 'lore', arg: 'elder', label: '聊聊天' });
     if (npcId === 'lingyu') opts.push({ act: 'lore', arg: 'lingyu', label: '请教御灵之道' });
     opts.push({ act: 'close', label: '告辞' });
@@ -533,12 +623,22 @@ var UI = {
         if (!LN.if || LN.if(Game)) { lore = LN.t; break; }
       }
     }
+    /* 主线进行中：对话顶部给出目标进度（新手不再迷路） */
+    var mainLine = '';
+    Object.keys(Game.quests).forEach(function (qid) {
+      var mq = QUESTS.filter(function (x) { return x.id === qid; })[0];
+      if (mq && mq.main && mq.giver === npcId) {
+        var st = Game.quests[qid];
+        var prog = mq.goal.type === 'kill' ? Math.min(st.p, mq.goal.n) + '/' + mq.goal.n : '';
+        mainLine = '<div class="dim tip">◆ 进行中主线【' + mq.name + '】' + (prog ? '：' + prog : '') + '（J 查看详情）</div>';
+      }
+    });
     var face = npc.face;
     this.$overlay.innerHTML =
       '<div class="dialog-box">' +
       '<div class="dlg-head"><img class="dlg-face" src="' + Sprites.npcCv(face, 0).toDataURL() + '">' +
       '<div><b>' + npc.name + '</b><div class="dim">' + (Game.map.def.name) + '</div></div></div>' +
-      '<div class="dlg-text">' + lore + '</div>' +
+      '<div class="dlg-text">' + lore + '</div>' + mainLine +
       '<div class="dlg-opts">' + opts.map(function (o, i) {
         return '<div class="dlg-opt" data-act="' + o.act + '" data-arg="' + (o.arg || '') + '">' + o.label + '</div>';
       }).join('') + '</div></div>';
@@ -613,6 +713,81 @@ var UI = {
     this.openShop(CARAVAN_STOCK, '行脚商队 · 稀有货');
   },
 
+  /* ===================== 炼制（灵医·白芷） ===================== */
+  openCraft: function () {
+    this.open = 'craft';
+    this.renderCraft();
+    SFX.play('ui');
+  },
+  renderCraft: function () {
+    var P = Game.player;
+    var body = RECIPES.map(function (r) {
+      var outIsEquip = EQUIPS[r.out[0]];
+      var outName = outIsEquip ? EQUIPS[r.out[0]].name : ITEMS[r.out[0]].name;
+      var outN = r.out[1] || 1;
+      var outIcon = outIsEquip
+        ? Sprites.iconUrl(EQUIPS[r.out[0]].slot === 'weapon' ? EQUIPS[r.out[0]].wt : EQUIPS[r.out[0]].slot, EQUIPS[r.out[0]].look.c)
+        : Sprites.iconUrl(ITEMS[r.out[0]].icon, ITEMS[r.out[0]].color);
+      var needStr = r.need.map(function (nd) {
+        var have = Game.bag[nd[0]] || 0;
+        return '<span class="' + (have >= nd[1] ? 'ok-txt' : 'lack-txt') + '">' + ITEMS[nd[0]].name + ' ' + have + '/' + nd[1] + '</span>';
+      }).join('　');
+      var can = r.need.every(function (nd) { return (Game.bag[nd[0]] || 0) >= nd[1]; }) && P.gold >= r.gold;
+      return '<div class="shop-row">' +
+        '<img src="' + outIcon + '">' +
+        '<div class="sp-main"><b>' + outName + (outN > 1 ? ' ×' + outN : '') + (outIsEquip ? '（装备）' : '') + '</b>' +
+        '<div class="dim">' + needStr + '</div></div>' +
+        '<span class="price">' + (r.gold ? r.gold + ' 金' : '免费') + '</span>' +
+        '<button class="btn xs" data-act="craftIt" data-arg="' + r.id + '"' + (can ? '' : ' disabled') + '>炼制</button>' +
+        '</div>';
+    }).join('');
+    this.$overlay.innerHTML =
+      '<div class="menu-box"><div class="menu-tabs">' +
+      '<span class="mtab sel">炼制 · 白芷的药庐</span>' +
+      '<span class="mtab gold-tab">💰 ' + P.gold + '</span>' +
+      '<span class="mtab close-x" data-act="close">✕</span></div>' +
+      '<div class="menu-body"><div class="dim tip">素材来自击败灵物、地图采集点（药草丛/矿脉/晶簇，按 F 采集）与猎告赏金。灰色为材料不足。</div>' + body + '</div></div>';
+    this.$overlay.classList.add('show');
+  },
+
+  /* ===================== 猎告牌（村口赏金） ===================== */
+  openBoard: function () {
+    this.open = 'board';
+    this.renderBoard();
+    SFX.play('ui');
+  },
+  renderBoard: function () {
+    var b = Game.bounty;
+    var body;
+    if (b) {
+      var sp = SPECIES[b.sp];
+      var done = b.p >= b.n;
+      body = '<div class="quest-row' + (done ? ' ready' : '') + '">' +
+        '<b>⛏ 猎告 · ' + sp.name + ' ×' + b.n + '</b>' +
+        '<div>活动地带：' + MAPS[b.map].name + '（认物种，不限地点）</div>' +
+        '<div class="dim">进度 ' + Math.min(b.p, b.n) + '/' + b.n + '　·　赏金 ' + b.gold + ' 金 + ' + b.exp + ' 经验' +
+        (done ? '　<em class="ok">✔ 可领赏</em>' : '') + '</div></div>' +
+        (done ? '<div class="dlg-opt" data-act="bountyTurnin">领取赏金（' + b.gold + ' 金 + ' + b.exp + ' exp）</div>' : '') +
+        '<div class="dlg-opt" data-act="bountyNew">换一张猎告（放弃当前）</div>';
+    } else {
+      var offer = this._bountyOffer || Game.genBounty();
+      this._bountyOffer = offer;
+      body = offer
+        ? '<div class="quest-row avail"><b>⛏ 新猎告 · ' + SPECIES[offer.sp].name + ' ×' + offer.n + '</b>' +
+        '<div>活动地带：' + MAPS[offer.map].name + '（认物种，不限地点）</div>' +
+        '<div class="dim">赏金 ' + offer.gold + ' 金 + ' + offer.exp + ' 经验</div></div>' +
+        '<div class="dlg-opt" data-act="bountyTake">接下这张猎告</div>' +
+        '<div class="dlg-opt" data-act="bountyNew">换一张</div>'
+        : '<div class="dim">还没有去过野外，接不了猎告。</div>';
+    }
+    this.$overlay.innerHTML =
+      '<div class="dialog-box board-box">' +
+      '<div class="dlg-head"><div><b>村口猎告牌</b><div class="dim">落霞村 · 赏金委托（无限接取）</div></div></div>' +
+      '<div class="dlg-text">猎告是村里贴出的悬赏：清够数目的灵物回来领赏。赏金随行历涨价，是正经的营生。</div>' +
+      body + '<div class="dlg-opt" data-act="close">离开</div></div>';
+    this.$overlay.classList.add('show');
+  },
+
   /* ===================== 铁匠 ===================== */
   smithTab: 'buy',
   openSmith: function () {
@@ -667,7 +842,7 @@ var UI = {
         return '<div class="shop-row">' +
           '<img src="' + Sprites.iconUrl(d.slot === 'weapon' ? d.wt : d.slot, d.look.c) + '">' +
           '<div class="sp-main"><b>' + equipName(e.id, e.plus || 0) + '</b><div class="dim">' + SLOT_NAME[d.slot] + ' · 需 Lv.' + d.lv + '</div></div>' +
-          '<span class="price">卖 ' + Math.floor((d.price || 300) * 0.6 * (1 + (e.plus || 0) * 0.1)) + ' 金</span>' +
+          '<span class="price">卖 ' + Math.floor((d.price || 300) * 0.3 * (1 + (e.plus || 0) * 0.1)) + ' 金</span>' +
           '<button class="btn xs" data-act="sellEquip" data-arg="' + idx + '">卖</button></div>';
       }).join('') || '<div class="dim">背包里没有装备</div>';
     }
@@ -836,11 +1011,16 @@ var UI = {
   },
   updateToasts: function (dt) {
     var changed = false;
+    var sig = '';
     for (var i = this.toasts.length - 1; i >= 0; i--) {
       this.toasts[i].t -= dt;
+      sig += i + ':' + Math.round(this.toasts[i].t) + ';';
       if (this.toasts[i].t <= 0) { this.toasts.splice(i, 1); changed = true; }
     }
-    if (changed || this.toasts.length) this.renderToasts();
+    if (changed || (this.toasts.length && sig !== this._toastSig)) {
+      this._toastSig = sig;
+      this.renderToasts();
+    }
   },
 
   /* ===================== 动作分发 ===================== */
@@ -874,6 +1054,67 @@ var UI = {
       case 'tab': this.menuTab = arg; this.renderMenu(); break;
       case 'close': this.close(); break;
       case 'hint': break;
+      /* 技能修炼 */
+      case 'skillUp': {
+        var parts4 = arg.split(':');
+        var sid4 = parts4[0], path4 = parts4[1] || null;
+        var before = P.skill[sid4] ? P.skill[sid4].lv : 1;
+        if (P.skillUp(sid4, path4)) {
+          var st4 = P.skill[sid4];
+          SFX.play(path4 ? 'evolve' : 'levelup');
+          Game.toast('【' + SKILLS[sid4].name + '】修炼至 Lv.' + st4.lv +
+            (path4 ? '（道途·' + SKILL_PATHS[path4].name + '）' : ''));
+          if (path4) Game.toast('道途已定：' + SKILL_PATHS[path4].desc);
+          Game.save();
+        }
+        this.renderMenu();
+        break;
+      }
+      /* 炼制 */
+      case 'craftIt': {
+        var r4 = RECIPES.filter(function (x) { return x.id === arg; })[0];
+        if (!r4) break;
+        var can = r4.need.every(function (nd) { return (Game.bag[nd[0]] || 0) >= nd[1]; }) && P.gold >= r4.gold;
+        if (!can) break;
+        r4.need.forEach(function (nd) {
+          Game.bag[nd[0]] -= nd[1];
+          if (Game.bag[nd[0]] <= 0) delete Game.bag[nd[0]];
+        });
+        P.gold -= r4.gold;
+        if (EQUIPS[r4.out[0]]) {
+          P.equipBag.push({ id: r4.out[0], plus: 0 });
+          Game.toast('炼成装备【' + EQUIPS[r4.out[0]].name + '】！');
+        } else {
+          Game.addItem(r4.out[0], r4.out[1] || 1);
+          Game.toast('炼成【' + ITEMS[r4.out[0]].name + '】×' + (r4.out[1] || 1));
+        }
+        SFX.play('evolve');
+        Game.save();
+        this.renderCraft();
+        break;
+      }
+      /* 猎告（展示与接取必须是同一张：用缓存的 offer） */
+      case 'bountyTake': {
+        var offer2 = this._bountyOffer || Game.genBounty();
+        this._bountyOffer = null;
+        if (offer2) { Game.bounty = offer2; Game.toast('接下猎告：' + SPECIES[offer2.sp].name + ' ×' + offer2.n); Game.save(); }
+        this.renderBoard();
+        break;
+      }
+      case 'bountyNew': {
+        Game.bounty = null;
+        var offer3 = Game.genBounty();
+        this._bountyOffer = null;
+        if (offer3) { Game.bounty = offer3; Game.toast('换到新猎告：' + SPECIES[offer3.sp].name + ' ×' + offer3.n); Game.save(); }
+        this.renderBoard();
+        break;
+      }
+      case 'bountyTurnin': {
+        if (Game.turnInBounty()) this.renderBoard();
+        break;
+      }
+      /* 全屏 */
+      case 'fullscreen': Game.toggleFullscreen(); this.renderMenu(); break;
       /* 角色装备 */
       case 'unequip': {
         var e = P.equip[arg];
@@ -955,6 +1196,7 @@ var UI = {
         break;
       }
       case 'lore': this.talk(this.talkNpc); break;
+      case 'craft': this.openCraft(); break;
       /* 商店 */
       case 'shopTab': this.shopTab = arg; this.renderShop(); break;
       case 'buyItem': {
@@ -995,7 +1237,7 @@ var UI = {
         var idx = parseInt(arg, 10);
         var e2 = P.equipBag[idx];
         if (!e2) break;
-        P.gold += Math.floor((EQUIPS[e2.id].price || 300) * 0.6 * (1 + (e2.plus || 0) * 0.1));
+        P.gold += Math.floor((EQUIPS[e2.id].price || 300) * 0.3 * (1 + (e2.plus || 0) * 0.1));
         P.equipBag.splice(idx, 1);
         SFX.play('coin');
         Game.save();
@@ -1141,6 +1383,7 @@ var UI = {
       '<div>生命 ' + st.hp + ' · 攻击 ' + st.atk + ' · 防御 ' + st.def + ' · 速度 ' + st.spd + '</div>' +
       '<div class="dim">技能：' + skills + '</div>' +
       '<div class="dim">' + evo + '</div>' +
+      '<div class="dim tip">濒倒后脱战 8 秒 / 战斗中 14 秒自动归队；灵果可立即救回（白芷处可炼制）</div>' +
       '<div class="dlg-opt danger-opt" data-act="release" data-arg="' + uid + '">放归山野（永久失去）</div>');
   },
   releaseSpirit: function (uid) {

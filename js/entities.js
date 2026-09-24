@@ -111,6 +111,9 @@ function Player(clsId, name) {
   this.regenT = 0;
   this.combatT = 0;                         /* >0 视为战斗中（回魔打折） */
   this.auto = false;
+  this.skill = {};                          /* 修炼：{sid: {lv, path}} */
+  this.skillPts = 1;                        /* 灵纹：技能修炼点 */
+  this.comboN = 0; this.comboT = 0;         /* 剑客被动：剑意层数 */
   this.recalc();
   this.hp = this.st.hp; this.mp = this.st.mp;
 }
@@ -119,6 +122,28 @@ Player.prototype = Object.create(Actor.prototype);
 Player.prototype.skills = function () {
   var self = this;
   return CLASSES[this.cls].skills.filter(function (s) { return s[0] <= self.lv; }).map(function (s) { return s[1]; });
+};
+/* 修炼后的有效技能（未修炼返回原始定义；pets/mobs 不走这里） */
+Player.prototype.effSkill = function (sid) {
+  var st = this.skill[sid];
+  if (!st || !st.lv || st.lv <= 1) return SKILLS[sid];
+  if (!this._effCache) this._effCache = {};
+  var key = sid + '|' + st.lv + '|' + (st.path || '');
+  if (!this._effCache[key]) this._effCache[key] = skillUpgradeDef(sid, st.lv, st.path);
+  return this._effCache[key];
+};
+/* 修炼：path 在 2→3 级时必选；返回 true 表示成功 */
+Player.prototype.skillUp = function (sid, path) {
+  var st = this.skill[sid] || (this.skill[sid] = { lv: 1, path: null });
+  if (st.lv >= SKILL_MAX_LV) return false;
+  if (this.skillPts < 1) return false;
+  var needPath = st.lv === 2;
+  if (needPath && !SKILL_PATHS[path]) return false;
+  if (needPath) st.path = path;
+  this.skillPts--;
+  st.lv++;
+  this._effCache = null;
+  return true;
 };
 Player.prototype.tier = function () {
   /* 立绘档位：已穿的最高档（寒铁 lv30 → 3） */
@@ -139,7 +164,7 @@ Player.prototype.recalc = function () {
     atk: cls.base.atk + cls.grow.atk * (lv - 1),
     def: cls.base.def + cls.grow.def * (lv - 1),
     spd: cls.base.spd + cls.grow.spd * (lv - 1),
-    crit: 0.05
+    crit: 0.05 + (this.cls === 'archer' ? 0.05 : 0)   /* 鹰眼：弓手暴击 +5% */
   };
   Object.keys(this.equip).forEach(function (k) {
     var e = this.equip[k];
@@ -177,6 +202,8 @@ Player.prototype.update = function (dt) {
   this.buffs.forEach(function (b) { b.t -= dt; if (b.t <= 0) expired = true; });
   if (expired) { this.buffs = this.buffs.filter(function (b) { return b.t > 0; }); this.recalc(); }
   if (this.combatT > 0) this.combatT -= dt;
+  /* 剑意衰减：4 秒未命中清零 */
+  if (this.comboT > 0) { this.comboT -= dt; if (this.comboT <= 0) this.comboN = 0; }
 
   this.tickStatus(dt);
   this.tickKnock(dt);
@@ -246,20 +273,24 @@ Player.prototype.update = function (dt) {
     }
   }
 
-  /* --- 攻击输入 --- */
+  /* --- 攻击输入（1~6 对应技能栏 6 格；普攻走左键/空格） --- */
   if (Input.mouse.down || Input.down('Space')) Battle.playerCast(this, 'basic', target);
   else if (this.auto && target) Battle.playerCast(this, 'basic', target);   /* 自动战斗自动出手 */
-  if (Input.pressed('Digit1')) Battle.playerCast(this, 0);
-  if (Input.pressed('Digit2')) Battle.playerCast(this, 1);
-  if (Input.pressed('Digit3')) Battle.playerCast(this, 2);
-  if (Input.pressed('Digit4')) Battle.playerCast(this, 3);
+  if (Input.pressed('Digit1')) Battle.playerCast(this, 1, target);
+  if (Input.pressed('Digit2')) Battle.playerCast(this, 2, target);
+  if (Input.pressed('Digit3')) Battle.playerCast(this, 3, target);
+  if (Input.pressed('Digit4')) Battle.playerCast(this, 4, target);
+  if (Input.pressed('Digit5')) Battle.playerCast(this, 5, target);
+  if (Input.pressed('Digit6')) Battle.playerCast(this, 6, target);
 
   /* --- 回复 --- */
+  if (this.itemCd > 0) this.itemCd -= dt;
   this.regenT += dt;
   if (this.regenT >= 1) {
     this.regenT -= 1;
     var inCombat = this.combatT > 0;
-    this.mp = Math.min(st.mp, this.mp + st.mp * (inCombat ? 0.012 : 0.05));
+    /* 战斗回魔 3.2%/秒：技能轮转可持续（原 1.2% 会把整个技能系统架空） */
+    this.mp = Math.min(st.mp, this.mp + st.mp * (inCombat ? 0.032 : 0.05));
     if (!inCombat && this.hp < st.hp) this.hp = Math.min(st.hp, this.hp + st.hp * 0.02);
     if (Game.map.def.safe) this.hp = st.hp;
   }
@@ -328,7 +359,7 @@ function PetActor(rec, slot) {
 }
 PetActor.prototype = Object.create(Actor.prototype);
 PetActor.prototype.down = function () {
-  this.downT = 0.01;                         /* 濒死：脱战 10 秒后自愈 */
+  this.downT = 0.01;                         /* 濒死：脱战 8 秒归队；战斗中 14 秒也可撑伤归队（不再"死了就是死了"） */
   this.hp = 0;
   this.status = {};
 };
@@ -337,21 +368,33 @@ PetActor.prototype.update = function (dt) {
   for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] -= dt;
   if (this.downT > 0) {
     var inCombat = Game.player.combatT > 0;
+    var wait = inCombat ? 14 : 8;
+    var back = inCombat ? 0.3 : 0.6;
     this.downT += dt;
-    if (!inCombat && this.downT > 10) {
-      this.hp = Math.ceil(this.st.hp * 0.6);
+    if (this.downT > wait) {
+      this.hp = Math.ceil(this.st.hp * back);
       this.downT = 0;
-      Game.addFloat(this.x, this.y - 30, this.sp.name + ' 归队！', '#8fe08f');
+      this.rec.downT = 0;
+      Game.addFloat(this.x, this.y - 30, this.sp.name + (inCombat ? ' 强撑归队！' : ' 归队！'), '#8fe08f');
+      Game.addFx({ type: 'heal', x: this.x, y: this.y, t: 0.5, dur: 0.5 });
     }
     return;
   }
   this.tickStatus(dt);
   this.tickKnock(dt);
   if (this.isStunned()) return;
+  /* 脱战缓回：灵宠每秒回 2%（受伤不必回村） */
+  this.regenT = (this.regenT || 0) + dt;
+  if (this.regenT >= 1) {
+    this.regenT -= 1;
+    if (Game.player.combatT <= 0 && this.hp < this.st.hp) {
+      this.hp = Math.min(this.st.hp, this.hp + this.st.hp * 0.02);
+    }
+  }
 
   var mode = Game.petMode;
   var P = Game.player;
-  /* 索敌 */
+  /* 索敌（不与捕捉抢怪：缚灵索束缚中的目标灵宠停手，交给主人） */
   this.retargetT -= dt;
   if (this.retargetT <= 0) {
     this.retargetT = 0.5;
@@ -362,26 +405,33 @@ PetActor.prototype.update = function (dt) {
       if (m) this.target = m;
     }
   }
+  if (Game.capture && this.target === Game.capture.target) this.target = null;
   if (this.target && (!this.target.alive || this.target.hp <= 0)) this.target = null;
 
-  /* 技能决策 */
-  var skills = petSkills(this.rec);
+  /* 技能决策：救场技（治疗/护盾）最高优先，输出技从强到弱（对齐怪物 AI）
+     技能表按 (种族,等级) 缓存，别每帧 filter+map */
+  var skKey = this.rec.sp + ':' + this.rec.lv;
+  if (this._skKey !== skKey) { this._skKey = skKey; this._skills = petSkills(this.rec); }
+  var skills = this._skills;
   var did = false;
-  for (var s = 0; s < skills.length && !did; s++) {
+  var P = Game.player;
+  var allies = [P].concat(Game.pets.filter(function (p) { return p !== this && !p.downT; }), this);
+  var low = null;
+  allies.forEach(function (a) { if (!low || a.hp / a.st.hp < low.hp / low.st.hp) low = a; });
+  for (var sh = 0; sh < skills.length && !did; sh++) {
+    var shSk = SKILLS[skills[sh]];
+    if ((this.cd[skills[sh]] || 0) > 0) continue;
+    if (shSk.kind === 'heal' && low && low.hp / low.st.hp < 0.62) {
+      Battle.petCast(this, skills[sh], low); did = true;
+    } else if (shSk.kind === 'shield' && this.hp / this.st.hp < 0.65) {
+      Battle.petCast(this, skills[sh], this); did = true;
+    }
+  }
+  for (var s = skills.length - 1; s >= 0 && !did; s--) {
     var sk = SKILLS[skills[s]];
     if ((this.cd[skills[s]] || 0) > 0) continue;
-    if (sk.kind === 'heal') {
-      /* 治疗最低血量的己方 */
-      var allies = [P].concat(Game.pets.filter(function (p) { return p !== this && !p.downT; }), this);
-      var low = null;
-      allies.forEach(function (a) { if (!low || a.hp / a.st.hp < low.hp / low.st.hp) low = a; });
-      if (low && low.hp / low.st.hp < 0.62) {
-        Battle.petCast(this, skills[s], low);
-        did = true;
-      }
-    } else if (sk.kind === 'shield') {
-      if (this.hp / this.st.hp < 0.65) { Battle.petCast(this, skills[s], this); did = true; }
-    } else if (sk.kind === 'buff') {
+    if (sk.kind === 'heal' || sk.kind === 'shield') continue;   /* 救场技已在上方处理 */
+    if (sk.kind === 'buff') {
       if (Game.player.combatT > 0) { Battle.petCast(this, skills[s], this); did = true; }
     } else if (this.target) {
       var rng = sk.range || 50;
@@ -451,14 +501,15 @@ PetActor.prototype.moveToward = function (tx, ty, dt) {
 PetActor.prototype.draw = function (g) {
   var sx = this.x - Game.cam.x, sy = this.y - Game.cam.y;
   if (this.downT > 0) {
-    /* 濒死：倒地灰影 */
+    /* 濒死：倒地灰影 + 归队倒计时 */
     g.globalAlpha = 0.5;
     g.fillStyle = '#5a5462';
     g.beginPath(); g.ellipse(sx, sy + 8, 14, 7, 0, 0, 6.28); g.fill();
     g.globalAlpha = 1;
+    var waitS = Math.max(0, Math.ceil((Game.player.combatT > 0 ? 14 : 8) - this.downT));
     g.fillStyle = '#c8c0d0';
     g.font = '10px sans-serif'; g.textAlign = 'center';
-    g.fillText('濒死', sx, sy);
+    g.fillText('濒死 ' + waitS + 's', sx, sy);
     return;
   }
   this.drawShadow(g);
@@ -620,7 +671,7 @@ Monster.prototype.checkPhase = function () {
     this.bossPhaseFx('狂暴二阶');
   } else if (this.phase === 2 && pct < 0.32) {
     this.phase = 3;
-    this.st.atk = Math.round(this.st.atk * 1.22 * 10) / 10;
+    this.st.atk = Math.round(this.st.atk * 1.14 * 10) / 10;
     this.st.spd *= 1.08;
     this.bossPhaseFx('狂暴三阶');
     /* 三阶段：唤魂 */
@@ -866,6 +917,13 @@ CaptureBall.prototype.update = function (dt) {
       this.target.status.stun = { t: 3.5, src: null, tick: 99 };
     }
   } else if (this.phase === 'shake') {
+    /* 摇动期间目标被打死：捕捉失败，别对尸体结契（击杀+捕捉双结算红线） */
+    if (!this.target.alive || this.target.hp <= 0) {
+      this.dead = true;
+      Game.capture = null;
+      Game.addFloat(this.tx, this.ty - 30, '目标已倒下', '#9aa8b0');
+      return;
+    }
     this.shakeT -= dt;
     if (this.shakeT <= 0) {
       this.shakeN++;

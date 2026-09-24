@@ -72,6 +72,18 @@ GameMap.prototype.generate = function () {
     this.t[this.idx(x, y)] = t;
   }
 
+  /* ---- 1.5 地表变化：草原/林间/桃林的裸土斑块（低频第三噪声） ---- */
+  if (theme === 'grass' || theme === 'forest' || theme === 'peach') {
+    var n3 = makeNoise(d.seed ^ 0x51ab3f);
+    var floorCh = theme === 'peach' ? 'pg' : 'g';
+    for (y = 2; y < H - 2; y++) for (x = 2; x < W - 2; x++) {
+      if (this.t[this.idx(x, y)] !== floorCh) continue;
+      var dv = n3(x / 8, y / 8);
+      if (dv > 0.74) this.t[this.idx(x, y)] = 'dt';
+      else if (dv < 0.16) this.t[this.idx(x, y)] = floorCh === 'g' ? 'g2' : 'pg';
+    }
+  }
+
   /* ---- 2. 洞窟：元胞自动机平滑 ---- */
   if (theme === 'cave') {
     var src = this.t.slice(), rounds = 5;
@@ -156,29 +168,99 @@ GameMap.prototype.generate = function () {
     });
   }
 
+  /* ---- 7.6 地标：每图主题化的小建筑群（确定性，不挡关键点） ---- */
+  this.placeLandmarks(rnd);
+
   /* ---- 8. 孤岛兜底 ---- */
   this.connectPockets();
+
+  /* ---- 9. 采集点：主题表加权布点（游戏层负责刷新与交互） ---- */
+  this.spawnGathers(rnd);
 };
 
-/* 走廊：宽 3，先走长轴 */
+/* 地标蓝图：中心装饰 + 卫星装饰（solid 控制占格） */
+GameMap.prototype.placeLandmarks = function (rnd) {
+  var self = this, theme = this.def.theme;
+  var plans = {
+    grass: [['bigtree', [[0, 0, true]]], ['pillar', [[0, 0, true], [2, 1, true], [-2, -1, true]]]],
+    forest: [['bigtree', [[0, 0, true], [2, 2, true], [-3, 1, true]]], ['well', [[0, 0, true]]]],
+    peach: [['bigtree', [[0, 0, true], [-2, 2, true]]], ['well', [[0, 0, true]]]],
+    volcano: [['totem', [[0, 0, true], [2, 0, true], [-2, 0, true], [0, -2, true]]], ['pillar', [[0, 0, true]]]],
+    cave: [['gravestone', [[0, 0, true], [2, 1, true], [-1, 2, true], [2, -1, true]]], ['pillar', [[0, 0, true], [1, 2, true]]]],
+    marsh: [['totem', [[0, 0, true], [-2, 1, true]]], ['bigtree', [[0, 0, true]]]],
+    snow: [['runestone', [[0, 0, true], [3, 0, true], [-3, 0, true], [0, 3, true]]], ['pillar', [[0, 0, true]]]],
+    desert: [['pillar', [[0, 0, true], [3, 1, true], [-3, -1, true], [1, -3, true]]], ['gravestone', [[0, 0, true], [2, 0, true]]]],
+    abyss: [['runestone', [[0, 0, true], [2, 2, true], [-2, -2, true]]], ['pillar', [[0, 0, true], [0, 3, true]]]],
+    village: [['well', [[12, 26, true]]]]
+  };
+  var list = plans[theme];
+  if (!list) return;
+  list.forEach(function (plan) {
+    /* 找一个离关键点足够远的落点（确定性尝试 40 次） */
+    var best = null;
+    for (var t = 0; t < 40; t++) {
+      var lx = 6 + Math.floor(rnd() * (self.w - 12)), ly = 6 + Math.floor(rnd() * (self.h - 12));
+      var d2 = self.dist2Key(lx, ly);
+      if (!best || d2 > best.d2) best = { x: lx, y: ly, d2: d2 };
+      if (d2 > 100) break;
+    }
+    plan[1].forEach(function (off) {
+      var px = U.clamp(best.x + off[0], 2, self.w - 3), py = U.clamp(best.y + off[1], 2, self.h - 3);
+      /* 地标脚下清出地面再放置 */
+      for (var j = -1; j <= 1; j++) for (var i = -1; i <= 1; i++) {
+        var cx = U.clamp(px + i, 1, self.w - 2), cy = U.clamp(py + j, 1, self.h - 2);
+        var cur = self.t[self.idx(cx, cy)];
+        if (TILE_SOLID[cur]) self.t[self.idx(cx, cy)] = self.floorOf(cur);
+      }
+      self.deco.push({ kind: plan[0], x: px, y: py });
+      if (off[2]) self.block[self.idx(px, py)] = 1;
+    });
+  });
+};
+
+/* 采集点：9~13 个，落在可达格上，离关键点 3 格外 */
+GameMap.prototype.spawnGathers = function (rnd) {
+  this.gathers = [];
+  var table = GATHER_THEMES[this.def.theme];
+  if (!table || this.def.safe) return;           /* 村庄安全区不设采集点 */
+  var n = 9 + Math.floor(rnd() * 5);
+  var guard = 0;
+  while (this.gathers.length < n && guard++ < 300) {
+    var x = 3 + Math.floor(rnd() * (this.w - 6)), y = 3 + Math.floor(rnd() * (this.h - 6));
+    if (this.isSolid(x, y) || this.block[this.idx(x, y)]) continue;
+    if (!this.reach || !this.reach[this.idx(x, y)]) continue;   /* 只落在可达区 */
+    if (this.dist2Key(x, y) < 9) continue;
+    if (this.gathers.some(function (g) { return Math.abs(g.tx - x) + Math.abs(g.ty - y) < 4; })) continue;
+    var kind = U.weighted(table.map(function (r) { return r; }));
+    this.gathers.push({ kind: kind, tx: x, ty: y, x: x * TILE + 16, y: y * TILE + 16, ready: true, t: 0 });
+  }
+};
+
+/* 走廊：宽 3，先走长轴；主脊铺路砖（踏出的路） */
 GameMap.prototype.carve = function (a, b) {
   var self = this;
-  function carveCell(x, y) {
+  function carveCell(x, y, spine) {
     for (var j = -1; j <= 1; j++) for (var i = -1; i <= 1; i++) {
       var x2 = U.clamp(x + i, 1, self.w - 2), y2 = U.clamp(y + j, 1, self.h - 2);
-      self.t[self.idx(x2, y2)] = self.floorOf(self.t[self.idx(x2, y2)]);
+      var cur = self.t[self.idx(x2, y2)];
+      self.block[self.idx(x2, y2)] = 0;      /* 走廊清掉装饰占格，防地标封路 */
+      self.t[self.idx(x2, y2)] = self.floorOf(cur);
+      /* 路面：走廊主脊的地面格铺成小径（水面/岩浆保留） */
+      if (spine && i === 0 && j === 0 && cur !== 'w' && cur !== 'mw' && cur !== 'l') {
+        self.t[self.idx(x2, y2)] = 'p';
+      }
     }
   }
   var x = a.x, y = a.y;
   var dx = b.x > x ? 1 : -1, dy = b.y > y ? 1 : -1;
   if (Math.abs(b.x - x) > Math.abs(b.y - y)) {
-    while (x !== b.x) { carveCell(x, y); x += dx; }
-    while (y !== b.y) { carveCell(x, y); y += dy; }
+    while (x !== b.x) { carveCell(x, y, true); x += dx; }
+    while (y !== b.y) { carveCell(x, y, true); y += dy; }
   } else {
-    while (y !== b.y) { carveCell(x, y); y += dy; }
-    while (x !== b.x) { carveCell(x, y); x += dx; }
+    while (y !== b.y) { carveCell(x, y, true); y += dy; }
+    while (x !== b.x) { carveCell(x, y, true); x += dx; }
   }
-  carveCell(b.x, b.y);
+  carveCell(b.x, b.y, true);
 };
 GameMap.prototype.floorOf = function (t) {
   switch (t) {
@@ -315,9 +397,17 @@ GameMap.prototype.placeDeco = function (rnd) {
       }
     });
   } else if (theme === 'village') {
-    /* 村庄：商店摊位、房子、装饰 */
+    /* 村庄：商店摊位、房子、猎告牌、装饰 */
     put('stall', 14, 20, true); put('house', 28, 20, true); put('house2', 20, 15, true);
     put('house2', 33, 9, true); put('house', 10, 27, true);
+    if (d.board) {
+      put('board', d.board.x, d.board.y, true);
+      /* 牌前清出行走位 */
+      for (var bj = -1; bj <= 1; bj++) for (var bi = -1; bi <= 1; bi++) {
+        var vx = U.clamp(d.board.x + bi, 1, this.w - 2), vy = U.clamp(d.board.y + 2 + bj, 1, this.h - 2);
+        if (TILE_SOLID[this.t[this.idx(vx, vy)] || '']) this.t[this.idx(vx, vy)] = 'wd';
+      }
+    }
     for (i = 0; i < 14; i++) {
       x = 3 + Math.floor(rnd() * (this.w - 6)); y = 3 + Math.floor(rnd() * (this.h - 6));
       if (walkable(x, y) && !nearKey(x, y, 2)) put('flower', x, y, false);
@@ -368,6 +458,7 @@ GameMap.prototype.connectPockets = function () {
   (d.portals || []).forEach(function (p) { keys.push(p); });
   (d.npcs || []).forEach(function (p) { keys.push(p); });
   if (this.bossPt) keys.push(this.bossPt);
+  (this.stelae || []).forEach(function (st) { keys.push({ x: st.x, y: st.y }); });
   var fixed = 0;
   keys.forEach(function (k) {
     if (!seen[self.idx(k.x, k.y)]) {
@@ -470,7 +561,7 @@ GameMap.prototype.findPath = function (sx, sy, gx, gy) {
 
 /* ---------------- 烘焙渲染 ---------------- */
 var TILE_VIS = {
-  g: 'grass', g2: 'grass', p: 'path', w: 'water', l: 'lava',
+  g: 'grass', g2: 'grass', dt: 'dirt', p: 'path', w: 'water', l: 'lava',
   r: 'rock', k: 'rock', s: 'stone', cf: 'cavef', cw: 'cavew',
   m: 'marsh', mw: 'marshw', wd: 'wood', sn: 'snow', pg: 'peach', sa: 'sand', ab: 'abyss'
 };
@@ -538,7 +629,7 @@ GameMap.prototype.bake = function () {
   var mc = document.createElement('canvas');
   mc.width = W; mc.height = H;
   var mg = mc.getContext('2d');
-  var MINI_COLOR = { g: '#4e8a3c', g2: '#427632', w: '#2e6ea0', l: '#c84818', r: '#62626e', k: '#62626e', s: '#7c7468', cf: '#3c3444', cw: '#241e2c', m: '#3d5c46', mw: '#2c5a54', wd: '#8c6a42', p: '#a08858', sn: '#c8d4dc', pg: '#6a9a52', sa: '#d8bc7e', ab: '#2a2440' };
+  var MINI_COLOR = { g: '#4e8a3c', g2: '#427632', dt: '#8a7048', w: '#2e6ea0', l: '#c84818', r: '#62626e', k: '#62626e', s: '#7c7468', cf: '#3c3444', cw: '#241e2c', m: '#3d5c46', mw: '#2c5a54', wd: '#8c6a42', p: '#a08858', sn: '#c8d4dc', pg: '#6a9a52', sa: '#d8bc7e', ab: '#2a2440' };
   for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
     mg.fillStyle = MINI_COLOR[this.t[this.idx(x, y)]] || '#4e8a3c';
     mg.fillRect(x, y, 1, 1);

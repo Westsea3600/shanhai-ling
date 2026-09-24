@@ -41,12 +41,36 @@ var Battle = {
     if (target.status.shock && atkEl === 'thunder') base *= 1.25;
     var ef = this.elemFactor(atkEl, defEl);
     base *= ef;
-    /* 暴击 */
-    var critChance = caster.kind === 'player' ? caster.st.crit : 0.06;
+    /* --- 职业被动（玩家侧） --- */
+    var isPlayer = caster.kind === 'player';
+    var basicCast = isPlayer && caster._basicCast;
+    if (isPlayer) {
+      var cls = caster.cls;
+      /* 术士·元素亲和：元素技能伤害 +12% */
+      if (cls === 'mage' && atkEl !== 'none') base *= 1.12;
+      /* 剑客·剑意：非普攻技能每层 +6% */
+      if (cls === 'sword' && !basicCast) base *= 1 + (caster.comboN || 0) * 0.06;
+      /* 弓手·鹰眼：远程手段按距离加成（最远 +30%） */
+      if (cls === 'archer' && (sk.kind === 'shot' || sk.kind === 'rain' || sk.kind === 'chain')) {
+        base *= 1 + Math.min(0.30, U.dist(caster.x, caster.y, target.x, target.y) / 600 * 0.30);
+      }
+      /* 剑客·硬朗：受击伤害 -8% */
+    }
+    if (target.kind === 'player' && target.cls === 'sword') base *= 0.92;
+    /* 暴击（修炼满阶力量道途有技能暴击加成） */
+    var critChance = isPlayer ? (caster.st.crit + (sk.critBonus || 0)) : 0.06;
     var crit = U.chance(critChance);
     if (crit) base *= 1.8;
     base *= U.rand(0.9, 1.1);
     var dmg = Math.max(1, Math.round(base));
+
+    /* 剑客·剑意：普攻命中叠层（4 秒衰减在 Player.update） */
+    if (basicCast && caster.comboN < 5) { caster.comboN++; caster.comboT = 4; }
+    if (basicCast && caster.comboN === 5 && !caster._comboMax) {
+      caster._comboMax = true;
+      Game.addFloat(caster.x, caster.y - 52, '剑意·五重叠满！', '#ffd740', 14);
+    }
+    if (basicCast && caster.comboN < 5) caster._comboMax = false;
 
     /* 目标护盾 */
     if (target.shield > 0) {
@@ -98,8 +122,8 @@ var Battle = {
     if (target.hp <= 0) this.onDeath(target, caster);
   },
 
-  applyStatusTo: function (target, id, caster) {
-    target.applyStatus(id, caster, STATUS[id].dur);
+  applyStatusTo: function (target, id, caster, dur) {
+    target.applyStatus(id, caster, dur || STATUS[id].dur);
     Game.addFloat(target.x, target.y - 44, STATUS[id].name, STATUS[id].color, 12);
     SFX.play('stun');
   },
@@ -116,7 +140,8 @@ var Battle = {
       var needStatus = target.status[cb.need], byEl = (sk.el === cb.by);
       if (!needStatus || !byEl) continue;
       if ((target._comboCd[cb.id] || 0) > now) return;
-      target._comboCd[cb.id] = now + 2.5;
+      /* 术士·元素亲和：连携触发冷却减半 */
+      target._comboCd[cb.id] = now + (caster.kind === 'player' && caster.cls === 'mage' ? 1.25 : 2.5);
       this.fireCombo(caster, target, cb);
       return;
     }
@@ -142,7 +167,7 @@ var Battle = {
     }
     for (var k = 0; k < hitList.length; k++) {
       this.applySkillHit(caster, hitList[k], { name: cb.name, el: 'none', kind: 'aoe', power: cb.mult * 100 }, { combo: false, noKnock: false });
-      if (cb.stun) this.applyStatusTo(hitList[k], 'stun', caster);
+      if (cb.stun) this.applyStatusTo(hitList[k], 'stun', caster, cb.stun);   /* 连携眩晕按各自文案时长 */
       if (cb.spread) this.applyStatusTo(hitList[k], cb.spread, caster);
       if (cb.id === 'detonate') this.applyStatusTo(hitList[k], 'burn', caster);  /* 爆燃刷新灼烧 */
     }
@@ -162,7 +187,7 @@ var Battle = {
   },
 
   /* ---------------- 玩家施法 ---------------- */
-  /* slot: 'basic' 或技能序号 0..3 */
+  /* slot: 'basic' 或技能序号 0..5 */
   playerCast: function (P, slot, autoTarget) {
     var skills = P.skills();
     var sid;
@@ -171,7 +196,7 @@ var Battle = {
       sid = skills[slot];
       if (!sid) return;
     }
-    var sk = SKILLS[sid];
+    var sk = P.effSkill(sid);                 /* 修炼后的有效技能 */
     if ((P.cd[sid] || 0) > 0) return;
     if (P.mp < sk.mp) {
       if (slot !== 'basic') Game.nudge(P.x, P.y - 40, '魔力不足');
@@ -181,8 +206,11 @@ var Battle = {
     P.cd[sid] = sk.cd;
     var aim = P.aim;
     var tx = Input.mouse.x + Game.cam.x, ty = Input.mouse.y + Game.cam.y;
-    if (autoTarget && slot === 'basic') { aim = U.ang(P.x, P.y, autoTarget.x, autoTarget.y); tx = autoTarget.x; ty = autoTarget.y; }
+    /* 自动战斗有目标：技能与落点都锁定目标（远程 AoE 不空大） */
+    if (autoTarget) { aim = U.ang(P.x, P.y, autoTarget.x, autoTarget.y); tx = autoTarget.x; ty = autoTarget.y; }
+    P._basicCast = slot === 'basic';
     this.castCommon(P, sk, aim, tx, ty);
+    P._basicCast = false;
   },
 
   /* 通用施法（玩家/灵宠/魔物共用演出与结算）；explicitTarget 供 heal/shield 指定目标 */
@@ -231,17 +259,32 @@ var Battle = {
         break;
       }
       case 'dash': {
-        /* 突进：位移 + 残影 + 途经伤害 */
+        /* 突进：位移 + 残影 + 沿途命中（先冲后判会冲过贴脸目标导致落空） */
         var dx = Math.cos(aim), dy = Math.sin(aim);
         var steps = Math.ceil((sk.dash || 150) / 12);
+        var dashHits = [];                        /* 每目标只结算一次 */
+        var dashR = (sk.range || 50) + 26;
         for (var s2 = 0; s2 < steps; s2++) {
           caster.x += dx * 12; caster.y += dy * 12;
           if (Game.map.hitAt(caster.x, caster.y, caster.r)) { caster.x -= dx * 12; caster.y -= dy * 12; break; }
           if (s2 % 2 === 0) Game.addFx({ type: 'afterimage', x: caster.x, y: caster.y, t: 0.3, dur: 0.3, r: caster.r });
+          var dashTargets = caster.kind === 'mob' ? [Game.player].concat(Game.pets) : Game.mobs;
+          var reached = false;
+          for (var dt3 = 0; dt3 < dashTargets.length; dt3++) {
+            var dt3t = dashTargets[dt3];
+            if (!dt3t || !dt3t.alive || dt3t.hp <= 0) continue;
+            if (dt3t.kind === 'pet' && dt3t.downT > 0) continue;
+            var dd3 = U.dist2(caster.x, caster.y, dt3t.x, dt3t.y);
+            if (dd3 < 44 * 44) reached = true;                 /* 贴到身前：不再过冲 */
+            if (dd3 < (dashR + dt3t.r) * (dashR + dt3t.r) && dashHits.indexOf(dt3t) < 0) {
+              dashHits.push(dt3t);
+              this.applySkillHit(caster, dt3t, sk);
+            }
+          }
+          if (reached) break;
         }
         Game.addFx({ type: 'greatslash', x: caster.x, y: caster.y - 8, t: 0.24, dur: 0.24, ang: aim, arc: 2.6, radius: sk.range || 50 });
         SFX.play('swing');
-        this.hitArc(caster, aim, (sk.range || 50) + 20, 2.4, sk);
         break;
       }
       case 'chain': {
@@ -310,11 +353,12 @@ var Battle = {
         }
         if (sk.buff) {
           var bstats = {};
-          bstats[Object.keys(sk.buff)[0]] = Object.values(sk.buff)[0];
-          caster.gainBuff && caster.gainBuff(sk.name, bstats, sk.buff.dur);
+          for (var bkey in sk.buff) if (bkey !== 'dur') bstats[bkey] = sk.buff[bkey];
+          var bdur = sk.buff.dur || 5;
+          caster.gainBuff && caster.gainBuff(sk.name, bstats, bdur);
           if (caster.kind === 'pet') {
             /* 灵宠的威嚎 buff 玩家攻击 */
-            Game.player.gainBuff(sk.name, { atk: 0.2 }, sk.buff.dur);
+            Game.player.gainBuff(sk.name, { atk: 0.2 }, bdur);
             Game.addFloat(caster.x, caster.y - 40, '威嚎！', '#ffd740');
           }
           Game.addFx({ type: 'shield', x: caster.x, y: caster.y, t: 0.5 });
@@ -352,11 +396,14 @@ var Battle = {
   makeProj: function (caster, sk, ang, speed) {
     var style = 'bolt';
     if (caster.kind === 'player') {
-      style = sk === SKILLS.shoot || sk === SKILLS.trishot || sk === SKILLS.stararrow ? 'arrow' : 'bolt';
+      /* 按武器类型与技能特征决定弹形（修炼克隆对象不能再用引用比较） */
+      var wt = CLASSES[caster.cls].weapon;
+      if (sk.pierce >= 10 && sk.wide >= 12) style = 'star';
+      else if (wt === 'bow') style = 'arrow';
+      else style = 'bolt';
     } else {
       style = sk.el === 'earth' ? 'rock' : 'bolt';
     }
-    if (sk === SKILLS.stararrow) style = 'star';
     var r = 5 + (sk.wide || 0) / 4;
     return new Projectile({
       x: caster.x + Math.cos(ang) * 14, y: caster.y - 8 + Math.sin(ang) * 14,
@@ -415,7 +462,9 @@ var Battle = {
 
   /* 弹道命中结算 */
   projectileHit: function (proj, target) {
-    this.applySkillHit(proj.owner, target, proj.skill || { name: '弹', el: proj.el, kind: 'shot', power: proj.power });
+    /* 灵宠没有走位 AI：对弹幕伤害打 6.5 折，免得弹幕战里宠物全程躺尸 */
+    this.applySkillHit(proj.owner, target, proj.skill || { name: '弹', el: proj.el, kind: 'shot', power: proj.power },
+      { powerMul: target.kind === 'pet' ? 0.65 : 1 });
   },
 
   /* ---------------- 灵宠 / 魔物施法 ---------------- */
@@ -448,9 +497,9 @@ var Battle = {
             if (!mob.alive || Game.state !== 'play') return;
             var a = phase + fired * 0.5;
             var p = Battle.makeProj(mob, sk, a, sk.speed || 260);
-            p.av = 1.6; p.ttl = 2.4; p.r = 6;
+            p.av = 1.6; p.ttl = 1.9; p.r = 6;
             Game.shots.push(p);
-            if (++fired < 12) Game.schedule(0.12, emit);
+            if (++fired < 8) Game.schedule(0.14, emit);
           };
           emit();
         })(e * Math.PI / 2 + Game.time);
@@ -535,10 +584,12 @@ var Battle = {
     while (P.lv < LEVEL_CAP && P.exp >= expToLevel(P.lv)) {
       P.exp -= expToLevel(P.lv);
       P.lv++;
+      P.skillPts = (P.skillPts || 0) + 1;      /* 每级 1 枚灵纹（技能修炼点） */
       P.recalc();
       P.hp = P.st.hp; P.mp = P.st.mp;
       SFX.play('levelup');
       Game.addFloat(P.x, P.y - 60, '升级！Lv.' + P.lv, '#ffd740', 18);
+      Game.addFloat(P.x, P.y - 38, '获得灵纹 ×1（K 键修炼技能）', '#c8a0ff', 12);
       Game.addFx({ type: 'levelup', x: P.x, y: P.y, t: 0.8, dur: 0.8 });
       Game.onPlayerLevel(P.lv);
     }
@@ -585,20 +636,30 @@ var Battle = {
     }
     return null;
   },
-  tryCapture: function (P) {
-    if (Game.capture) return;
-    var ball = this.bestBall();
-    if (!ball) { Game.nudge(P.x, P.y - 40, '没有缚灵索'); return; }
-    /* 最近的可捕捉灵物 */
-    var target = null, bd = 300 * 300;
+  /* 捕捉目标选择（准星提示与实际投索共用同一口径） */
+  captureTarget: function (P, range) {
+    var bd = (range || 300) * (range || 300), bestRate = -1, bestD = Infinity, target = null;
+    var ball = this.bestBall();                 /* 每帧调用：提出循环外 */
     for (var i = 0; i < Game.mobs.length; i++) {
       var m = Game.mobs[i];
       if (!m.alive || m.hp <= 0) continue;
       if (m.boss) continue;
       if (m.summoned) continue;                 /* BOSS 唤魂不可捕捉 */
       var d = U.dist2(P.x, P.y, m.x, m.y);
-      if (d < bd) { bd = d; target = m; }
+      if (d >= bd) continue;
+      var rate = ball ? this.captureRate(m, ball) : 0;
+      if (rate > bestRate + 0.001 || (Math.abs(rate - bestRate) <= 0.001 && d < bestD)) {
+        bestRate = rate; bestD = d; target = m;
+      }
     }
+    return target;
+  },
+  tryCapture: function (P) {
+    if (Game.capture) return;
+    var ball = this.bestBall();
+    if (!ball) { Game.nudge(P.x, P.y - 40, '没有缚灵索'); return; }
+    /* 最近的可捕捉灵物（成功率最高优先） */
+    var target = this.captureTarget(P, 300);
     if (!target) { Game.nudge(P.x, P.y - 40, '附近没有可捕捉的灵物'); return; }
     Game.bag[ball]--;
     if (Game.bag[ball] <= 0) delete Game.bag[ball];

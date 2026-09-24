@@ -830,6 +830,86 @@ var Sprites = (function () {
       gr.px(16, 23, '#d0c8ff'); gr.px(10, 26, '#d0c8ff'); gr.px(22, 25, '#d0c8ff');
       gr.ell(16, 38, 5, 2, U.shade('#7a68c8', -0.25));
       gr.px(15, 20, '#fff');      /* 顶端星芒 */
+    } else if (kind === 'herbnode') {
+      /* 药草丛：可采集，多株攒簇 + 亮点 */
+      var hb;
+      for (hb = 0; hb < 5; hb++) {
+        var hx = 10 + hb * 3, hy = 36 - (hb % 2) * 3;
+        gr.line(hx, hy, hx + (hb % 2 ? 1 : -1), hy - 8, '#4c8c40');
+        gr.ell(hx, hy - 9, 2.2, 2.0, hb % 2 ? '#7cb342' : '#8fca50');
+      }
+      gr.ell(16, 37, 9, 3, '#3a5c30');
+      gr.px(13, 26, '#ffe98a'); gr.px(19, 28, '#ffe98a');
+    } else if (kind === 'orenode') {
+      /* 矿脉：岩壳夹亮矿 */
+      gr.ell(16, 31, 10, 8, '#6a6a76');
+      gr.ell(12, 28, 6, 5, '#7c7c88');
+      gr.ell(20, 33, 5, 4, '#5c5c68');
+      var or_;
+      for (or_ = 0; or_ < 5; or_++) gr.px(11 + or_ * 3, 28 + (or_ % 2) * 4, or_ % 2 ? '#ffe98a' : '#d8c890');
+      gr.rect(8, 37, 17, 2, '#565662');
+    } else if (kind === 'crystalnode') {
+      /* 晶簇：多棱晶柱 */
+      gr.line(16, 38, 16, 20, '#a8c8e8');
+      gr.line(16, 36, 10, 27, '#8fb8dc'); gr.line(16, 34, 22, 26, '#c0d8f0');
+      gr.line(16, 30, 12, 23, '#8fb8dc'); gr.line(16, 31, 20, 22, '#c0d8f0');
+      gr.px(16, 19, '#fff'); gr.px(12, 22, '#e0f0ff'); gr.px(20, 21, '#e0f0ff');
+      gr.ell(16, 38, 7, 2, '#6a86a8');
+    } else if (kind === 'sandnode') {
+      /* 流金沙窝：沙堆 + 金屑 */
+      gr.ell(16, 34, 11, 5, '#d8bc7e');
+      gr.ell(13, 32, 6, 3, '#e8d090');
+      var gd;
+      for (gd = 0; gd < 6; gd++) gr.px(10 + gd * 2, 30 + (gd % 3), gd % 2 ? '#ffe98a' : '#f4d06a');
+      gr.ell(16, 37, 12, 2, '#b89a5e');
+    } else if (kind === 'board') {
+      /* 猎告牌：木柱 + 告示 */
+      gr.rect(15, 22, 2, 16, '#5c4426');
+      gr.rect(6, 12, 20, 13, '#8a6a42');
+      gr.rect(6, 12, 20, 2, '#a08050');
+      gr.rect(9, 16, 6, 1, '#e8dcc0'); gr.rect(9, 18, 10, 1, '#d8ccb0'); gr.rect(9, 20, 8, 1, '#e8dcc0');
+      gr.rect(17, 15, 6, 7, '#d8b870');
+      gr.px(19, 17, '#6a3434'); gr.px(21, 18, '#6a3434');
+    } else if (kind === 'bigtree') {
+      /* 巨树：地标 */
+      gr.rect(14, 26, 5, 13, '#5c4426');
+      gr.ell(16, 14, 13, 10, '#35682c'); gr.ell(11, 11, 8, 6, '#4c8c40'); gr.ell(22, 15, 8, 6, '#3e7a34');
+      gr.ell(16, 8, 7, 5, '#5c9c50');
+      gr.px(9, 10, '#78b060'); gr.px(23, 12, '#78b060'); gr.px(16, 5, '#78b060');
+    } else if (kind === 'pillar') {
+      /* 遗迹石柱：断口 + 刻纹 */
+      gr.rect(11, 14, 10, 24, '#8c8478');
+      gr.rect(10, 12, 12, 3, '#9c9488');
+      gr.rect(11, 14, 10, 2, '#7c7468');
+      gr.rect(13, 20, 6, 1, '#a8a094'); gr.rect(13, 24, 6, 1, '#a8a094'); gr.rect(13, 28, 4, 1, '#a8a094');
+      gr.px(11, 17, '#b0a898'); gr.rect(9, 37, 14, 2, '#565662');
+    } else if (kind === 'gravestone') {
+      /* 墓碑 */
+      gr.ell(16, 24, 5, 6, '#7c7468');
+      gr.rect(11, 24, 10, 13, '#7c7468');
+      gr.rect(13, 26, 6, 1, '#5c564c'); gr.rect(14, 29, 4, 1, '#5c564c');
+      gr.ell(16, 37, 8, 2, '#4c4650');
+    } else if (kind === 'well') {
+      /* 石井 */
+      gr.ell(16, 30, 9, 5, '#8c8478');
+      gr.ell(16, 30, 6, 3, '#2e5a80');
+      gr.rect(8, 14, 2, 16, '#6a5a44'); gr.rect(22, 14, 2, 16, '#6a5a44');
+      gr.line(9, 14, 23, 14, '#8a6a42'); gr.line(10, 14, 16, 10, '#8a6a42'); gr.line(22, 14, 16, 10, '#8a6a42');
+      gr.rect(14, 16, 4, 3, '#5c4426');
+    } else if (kind === 'totem') {
+      /* 雷图腾柱 */
+      gr.rect(13, 12, 6, 26, '#7a5c3a');
+      gr.ell(16, 12, 5, 3, '#8a6a44');
+      gr.rect(15, 17, 2, 6, '#ffd740');
+      gr.px(13, 19, '#ffd740'); gr.px(19, 20, '#ffd740');
+      gr.rect(11, 24, 10, 2, '#5c4426'); gr.rect(11, 28, 10, 2, '#5c4426');
+      gr.px(16, 10, '#fff2b0');
+    } else if (kind === 'runestone') {
+      /* 符文石（雪原/归墟） */
+      gr.ell(16, 24, 7, 9, '#9aa8b8');
+      gr.ell(16, 22, 5, 6, '#b0c0d0');
+      gr.px(14, 20, '#7fd8f0'); gr.px(18, 24, '#7fd8f0'); gr.px(16, 27, '#7fd8f0');
+      gr.ell(16, 37, 8, 2, '#6a7888');
     }
     gr.lightRamp(0.8);
     gr.topLight();

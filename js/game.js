@@ -30,6 +30,7 @@ var Game = {
   achv: {},
   playTime: 0,
   interactHint: '',
+  bounty: null,                                /* 猎告赏金：{sp, map, n, p, gold, exp} */
 
   /* ===================== 开局 / 读档 ===================== */
   newGame: function (cls, name) {
@@ -52,20 +53,61 @@ var Game = {
     this.playTime = 0;
     this.event = null; this.eventCd = 55;
     this.caravanNpc = null;
+    this.bounty = null;
+    this.gatherRestore = {};
     /* 序章过场（重开新档播一次；继续旅程不再播） */
     var self = this;
     UI.prologue(function () {
-      UI.toast('欢迎来到山海世界！按 F 与村民对话，WASD 移动。');
-      UI.toast('主线委托在村长·姜石处（头顶 ! 标记）');
+      UI.toast('欢迎来到山海世界！WASD 移动，鼠标左键攻击，Q/R 喝药。');
+      UI.toast('主线【初试身手】已开始：击败 5 只野生灵物（右上角追踪，J 查看详情）');
+      UI.toast('捕捉诀窍：先把灵物打到残血、带上异常状态再按 E——满血硬抓十投九空');
+      UI.toast('升级获得灵纹，按 K 修炼技能（3 级起可选道途变种）');
     });
     this.gotoMap('village', 20, 17);
     this.save();
   },
 
+  /* 采集冷却快照/恢复（防重开会话无限刷采集点） */
+  snapshotGathers: function () {
+    var out = {};
+    /* 已被 LRU 淘汰但冷却仍在跑的图，先并入 */
+    Object.keys(this.gatherRestore || {}).forEach(function (mid) { out[mid] = this.gatherRestore[mid]; }, this);
+    Object.keys(this.mapCache).forEach(function (mid) {
+      var gs = this.mapCache[mid].gathers || [];
+      var cds = [];
+      gs.forEach(function (g, i) { if (!g.ready) cds.push([i, Math.round(g.t)]); });
+      if (cds.length) out[mid] = cds;
+    }, this);
+    return out;
+  },
+  restoreGathers: function (map) {
+    var pend = this.gatherRestore && this.gatherRestore[map.id];
+    if (!pend || !map.gathers) return;
+    pend.forEach(function (r) {
+      if (map.gathers[r[0]]) { map.gathers[r[0]].ready = false; map.gathers[r[0]].t = r[1]; }
+    });
+    delete this.gatherRestore[map.id];
+  },
   gotoMap: function (id, tx, ty) {
     var def = MAPS[id];
     if (!this.mapCache[id]) this.mapCache[id] = new GameMap(id);
     this.map = this.mapCache[id];
+    /* 烘焙大图 LRU：全图常驻 ~100MB 画布内存，只留最近 3 张（冷却状态先存档化） */
+    var order = this._mapOrder || (this._mapOrder = []);
+    if (order.indexOf(id) >= 0) order.splice(order.indexOf(id), 1);
+    order.push(id);
+    while (order.length > 3) {
+      var drop = order.shift();
+      if (drop === id) continue;
+      if (this.mapCache[drop]) {
+        var cds = [];
+        (this.mapCache[drop].gathers || []).forEach(function (g, gi) { if (!g.ready) cds.push([gi, Math.round(g.t)]); });
+        if (!this.gatherRestore) this.gatherRestore = {};
+        if (cds.length) this.gatherRestore[drop] = cds;
+        delete this.mapCache[drop];
+      }
+    }
+    this.restoreGathers(this.map);
     if (tx === undefined) {
       var sp = this.map.spawn;
       tx = sp.x; ty = sp.y;
@@ -151,6 +193,11 @@ var Game = {
       if (!this.team[i]) { this.team[i] = rec.uid; break; }
     }
     this.refreshPets();
+    /* 共鸣教学：满编但属性重复时提示混编价值 */
+    if (this.pets.length === 3 && !this.resonance && !this.flags.hintReso) {
+      this.flags.hintReso = 1;
+      this.toast('编队小知识：三只互异属性的灵物同队可触发「元素共鸣」（全员攻击 +8%）');
+    }
   },
 
   /* ===================== 刷怪 ===================== */
@@ -238,7 +285,8 @@ var Game = {
     }
   },
   startEvent: function () {
-    var type = U.weighted([['migration', 3], ['frenzy', 2], ['caravan', 3], ['treasure', 2]]);
+    /* 兽潮有等级门槛：Lv6 前不触发（新手保护） */
+    var type = U.weighted([['migration', 3], ['frenzy', this.player.lv >= 6 ? 2 : 0], ['caravan', 3], ['treasure', 2]]);
     var self = this;
     if (type === 'migration') {
       this.event = { type: type, t: 40 };
@@ -313,6 +361,9 @@ var Game = {
     var self = this;
     UI.boot();
     this._loopTick = 0;
+    /* 全屏自适应：画面随窗口走（大屏看得多，小屏看得少），上限防性能炸裂 */
+    this.resize();
+    if (window.addEventListener) window.addEventListener('resize', function () { self.resize(); });
     requestAnimationFrame(function loop(t) {
       self.loop(t);
       requestAnimationFrame(loop);
@@ -322,6 +373,24 @@ var Game = {
     setInterval(function () {
       if (performance.now() - self._loopTick > 120) self.loop(performance.now());
     }, 40);
+  },
+  resize: function () {
+    var w = Math.round(U.clamp((window.innerWidth || 960), 560, 1920));
+    var h = Math.round(U.clamp((window.innerHeight || 576), 380, 1200));
+    if (w === this.W && h === this.H) return;
+    this.W = w; this.H = h;
+    if (!this.cv) return;                      /* 无头测试桩：只改逻辑尺寸 */
+    this.cv.width = w; this.cv.height = h;
+    if (this.lightCv) { this.lightCv.width = w; this.lightCv.height = h; }
+    this.g = this.cv.getContext('2d');
+    if (this.map && this.player) this.camSnap();
+  },
+  toggleFullscreen: function () {
+    try {
+      var el = document.getElementById('app') || document.documentElement;
+      if (document.fullscreenElement) { if (document.exitFullscreen) document.exitFullscreen(); }
+      else if (el.requestFullscreen) el.requestFullscreen();
+    } catch (e) { }
   },
   loop: function (t) {
     this._loopTick = performance.now();
@@ -336,7 +405,13 @@ var Game = {
       if (this.state === 'play') UI.hud();
       UI.updateToasts(dt);
     } catch (e) {
-      if (!this._errOnce) { this._errOnce = true; console.error(e); }
+      /* 按错误签名去重上报：同一处错误只刷一次控制台，但新错误不静默 */
+      var sig = (e && e.message) || 'unknown';
+      if (!this._errLog) this._errLog = {};
+      if (!this._errLog[sig]) {
+        this._errLog[sig] = 1;
+        console.error(e);
+      }
     }
     Input.endFrame();
   },
@@ -371,18 +446,35 @@ var Game = {
     this.updateEvent(dt);
     this.updateInteract();
     this.checkHotkeys();
-    /* 相机 */
+    /* 换图提示：等级超出本图推荐区间且存在可进的更高级图时，提醒一次 */
+    if (!this.map.def.safe && P.lv > this.map.def.lv[1] + 2 && !this.flags['hintLv_' + this.map.id]) {
+      var up = (this.map.def.portals || []).filter(function (p) { return P.lv >= (p.needLv || 1) && MAPS[p.to].lv[0] > Game.map.def.lv[1]; })[0];
+      if (up) {
+        this.flags['hintLv_' + this.map.id] = 1;
+        this.toast('你已强过这片山泽（Lv.' + P.lv + '）——去传送门看看更高级的猎场吧（主线另有指引时以主线为准）。');
+      }
+    }
+    /* 相机（地图比画面小时居中显示） */
     var txx = P.x - this.W / 2, tyy = P.y - this.H / 2;
-    this.cam.x = U.clamp(U.lerp(this.cam.x, txx, Math.min(1, dt * 8)), 0, this.map.w * TILE - this.W);
-    this.cam.y = U.clamp(U.lerp(this.cam.y, tyy, Math.min(1, dt * 8)), 0, this.map.h * TILE - this.H);
+    var maxX = this.map.w * TILE - this.W, maxY = this.map.h * TILE - this.H;
+    this.cam.x = maxX > 0 ? U.clamp(U.lerp(this.cam.x, txx, Math.min(1, dt * 8)), 0, maxX) : maxX / 2;
+    this.cam.y = maxY > 0 ? U.clamp(U.lerp(this.cam.y, tyy, Math.min(1, dt * 8)), 0, maxY) : maxY / 2;
+    /* 采集点刷新 */
+    (this.map.gathers || []).forEach(function (gd) {
+      if (!gd.ready) {
+        gd.t -= dt;
+        if (gd.t <= 0) gd.ready = true;
+      }
+    });
     if (this.shakeT > 0) this.shakeT -= dt;
     if (this.flashT > 0) this.flashT -= dt;
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
     this.updateAchv();
   },
   camSnap: function () {
-    this.cam.x = U.clamp(this.player.x - this.W / 2, 0, this.map.w * TILE - this.W);
-    this.cam.y = U.clamp(this.player.y - this.H / 2, 0, this.map.h * TILE - this.H);
+    var maxX = this.map.w * TILE - this.W, maxY = this.map.h * TILE - this.H;
+    this.cam.x = maxX > 0 ? U.clamp(this.player.x - this.W / 2, 0, maxX) : maxX / 2;
+    this.cam.y = maxY > 0 ? U.clamp(this.player.y - this.H / 2, 0, maxY) : maxY / 2;
   },
   shake: function (amp) { this.shakeT = 0.25; this.shakeAmp = amp; },
   pulseHit: function (dmg) { this.hitStopT = Math.max(this.hitStopT, Math.min(0.055, 0.020 + dmg * 0.0006)); },
@@ -404,6 +496,16 @@ var Game = {
       var d = U.dist2(P.x, P.y, st.x * TILE + 16, st.y * TILE + 16);
       if (d < bd) { bd = d; best = { type: 'stela', st: st }; }
     });
+    (this.map.gathers || []).forEach(function (gd) {
+      if (!gd.ready) return;
+      var d = U.dist2(P.x, P.y, gd.x, gd.y);
+      if (d < bd) { bd = d; best = { type: 'gather', gd: gd }; }
+    });
+    if (this.map.def.board) {
+      var b = this.map.def.board;
+      var db = U.dist2(P.x, P.y, b.x * TILE + 16, b.y * TILE + 16);
+      if (db < bd) { bd = db; best = { type: 'board' }; }
+    }
     if (this.caravanNpc) {
       var d2 = U.dist2(P.x, P.y, this.caravanNpc.x, this.caravanNpc.y);
       if (d2 < bd) { bd = d2; best = { type: 'caravan' }; }
@@ -423,6 +525,10 @@ var Game = {
       this.interactHint = this.flags.stelaeFound && this.flags.stelaeFound[it.st.def.id]
         ? it.st.def.name + '（已读过）'
         : '按 F 读取「' + it.st.def.name + '」';
+    } else if (it.type === 'gather') {
+      this.interactHint = '按 F 采集「' + GATHER_DEFS[it.gd.kind].name + '」';
+    } else if (it.type === 'board') {
+      this.interactHint = this.bounty && this.bounty.p >= this.bounty.n ? '按 F 领取猎告赏金' : '按 F 查看猎告（赏金委托）';
     } else {
       this.interactHint = '按 F 逛逛行脚商队';
     }
@@ -445,6 +551,7 @@ var Game = {
     if (Input.pressed('KeyP')) UI.openMenu('spirit');
     if (Input.pressed('KeyJ')) UI.openMenu('quest');
     if (Input.pressed('KeyC')) UI.openMenu('char');
+    if (Input.pressed('KeyK')) UI.openMenu('skill');
     if (Input.pressed('KeyM')) UI.openMenu('dex');   /* M 打开图鉴（D 已被向右移动占用） */
     /* Esc/Tab 已由 UI 层 document 监听统一接管（面板开时游戏循环停更，这里读不到） */
     if (Input.pressed('F5')) { this.save(); this.toast('已保存'); }
@@ -483,9 +590,69 @@ var Game = {
       UI.talk(it.n.id);
     } else if (it.type === 'stela') {
       this.readStela(it.st);
+    } else if (it.type === 'gather') {
+      this.doGather(it.gd);
+    } else if (it.type === 'board') {
+      UI.openBoard();
     } else {
       UI.openCaravan();
     }
+  },
+
+  /* ===================== 采集 ===================== */
+  doGather: function (gd) {
+    if (!gd.ready) return;
+    var def = GATHER_DEFS[gd.kind];
+    gd.ready = false;
+    gd.t = U.rand(55, 100);
+    var n = U.randInt(def.n[0], def.n[1]);
+    var gold = U.randInt(def.gold[0], def.gold[1]);
+    this.addItem(def.item, n);
+    this.player.gold += gold;
+    this.addFloat(gd.x, gd.y - 36, def.name + ' +' + n, '#8fe08f', 13);
+    this.addFloat(gd.x, gd.y - 20, '+' + gold + ' 金', '#ffd740', 12);
+    this.addFx({ type: 'ring', x: gd.x, y: gd.y, r: 4, maxR: 26, t: 0.4, dur: 0.4, color: '#8fe08f' });
+    SFX.play('pick');
+    this.save();
+  },
+
+  /* ===================== 猎告（无限赏金，赚灵石的活计） ===================== */
+  genBounty: function () {
+    /* 优先已踏足地图；一个野外都没去过时，按等级兜底给邻近图 */
+    var maps = Object.keys(this.visited).filter(function (mid) { return MAPS[mid].spawn; });
+    if (!maps.length) {
+      maps = Object.keys(MAPS).filter(function (mid) {
+        return MAPS[mid].spawn && MAPS[mid].lv[0] <= Game.player.lv + 2;
+      });
+    }
+    if (!maps.length) return null;
+    var mid = U.choice(maps);
+    var row = U.weighted(MAPS[mid].spawn.map(function (r) { return [r, r[3]]; }));
+    var rare = row[3] <= 6;
+    var n = rare ? U.randInt(2, 4) : U.randInt(5, 10);
+    var gold = Math.round((40 + this.player.lv * 9 + n * 8) * (rare ? 1.5 : 1));
+    var exp = Math.round(n * (6 + this.player.lv * 1.0) * (rare ? 1.4 : 1));
+    return { sp: row[0], map: mid, n: n, p: 0, gold: gold, exp: exp };
+  },
+  turnInBounty: function () {
+    var b = this.bounty;
+    if (!b || b.p < b.n) return false;
+    this.player.gold += b.gold;
+    this.player.exp += b.exp;
+    this.addFloat(this.player.x, this.player.y - 50, '+' + b.gold + ' 金（猎告赏金）', '#ffd740', 14);
+    while (this.player.lv < LEVEL_CAP && this.player.exp >= expToLevel(this.player.lv)) {
+      this.player.exp -= expToLevel(this.player.lv);
+      this.player.lv++;
+      this.player.skillPts = (this.player.skillPts || 0) + 1;
+      this.player.recalc();
+      this.player.hp = this.player.st.hp; this.player.mp = this.player.st.mp;
+      Game.addFloat(this.player.x, this.player.y - 70, '升级！Lv.' + this.player.lv, '#ffd740', 18);
+    }
+    this.bounty = null;
+    SFX.play('coin');
+    this.toast('猎告完成！赏金已入账。可再接新的猎告。');
+    this.save();
+    return true;
   },
 
   /* ===================== 山海遗刻 ===================== */
@@ -538,10 +705,37 @@ var Game = {
     if (!def || !(this.bag[id] > 0)) return false;
     var P = this.player;
     if (def.type === 'use') {
-      if (def.heal) {
+      /* 药水/灵果共享 1.2 秒冷却：嗑药不能当无敌 */
+      if ((P.itemCd || 0) > 0) { this.nudge(P.x, P.y - 40, '药力未化（稍候）'); return false; }
+      /* 灵果：喂给出战灵宠（治疗/复活） */
+      if (def.petHeal) {
+        if (!this.pets.length) { this.nudge(P.x, P.y - 40, '没有出战灵宠'); return false; }
+        var fed = false;
+        this.pets.forEach(function (p) {
+          if (p.downT > 0) {
+            p.downT = 0;
+            p.hp = Math.ceil(p.st.hp * (def.revivePct || 0.5));
+            Game.addFloat(p.x, p.y - 34, p.sp.name + ' 复苏！', '#8fe08f', 14);
+            Game.addFx({ type: 'heal', x: p.x, y: p.y, t: 0.5, dur: 0.5 });
+            fed = true;
+          } else if (p.hp < p.st.hp) {
+            p.hp = Math.min(p.st.hp, p.hp + p.st.hp * def.petHeal);
+            Game.addFloat(p.x, p.y - 34, '+' + Math.round(p.st.hp * def.petHeal), '#8fe08f', 12);
+            fed = true;
+          }
+        });
+        if (!fed) { this.nudge(P.x, P.y - 40, '灵宠们都状态良好'); return false; }
+        SFX.play('heal');
+        this.bag[id]--;
+        if (this.bag[id] <= 0) delete this.bag[id];
+        P.itemCd = 1.2;
+        return true;
+      }
+      if (def.heal || def.healPct) {
+        var healAmt = def.heal || Math.round(P.st.hp * def.healPct);
         if (P.hp >= P.st.hp) { this.nudge(P.x, P.y - 40, '生命已满'); return false; }
-        P.hp = Math.min(P.st.hp, P.hp + def.heal);
-        this.addFloat(P.x, P.y - 44, '+' + def.heal, '#8fe08f', 15);
+        P.hp = Math.min(P.st.hp, P.hp + healAmt);
+        this.addFloat(P.x, P.y - 44, '+' + healAmt, '#8fe08f', 15);
         this.addFx({ type: 'heal', x: P.x, y: P.y, t: 0.5, dur: 0.5 });
       }
       if (def.mana) {
@@ -552,6 +746,7 @@ var Game = {
       SFX.play('heal');
       this.bag[id]--;
       if (this.bag[id] <= 0) delete this.bag[id];
+      P.itemCd = 1.2;
       return true;
     }
     return false;
@@ -587,6 +782,11 @@ var Game = {
         self.toast('委托【' + q.name + '】可以交付了（' + questGiveText(q) + '）');
       }
     });
+    /* 猎告进度（不限地图，认物种） */
+    if (type === 'kill' && this.bounty && data.sp === this.bounty.sp) {
+      this.bounty.p++;
+      if (this.bounty.p === this.bounty.n) this.toast('猎告目标已清空！回村口猎告牌领赏。');
+    }
   },
   questReady: function (q) {
     var st = this.quests[q.id];
@@ -614,6 +814,7 @@ var Game = {
       while (this.player.lv < LEVEL_CAP && this.player.exp >= expToLevel(this.player.lv)) {
         this.player.exp -= expToLevel(this.player.lv);
         this.player.lv++;
+        this.player.skillPts = (this.player.skillPts || 0) + 1;
         this.player.recalc();
         this.player.hp = this.player.st.hp; this.player.mp = this.player.st.mp;
         Game.addFloat(this.player.x, this.player.y - 60, '升级！Lv.' + this.player.lv, '#ffd740', 18);
@@ -633,8 +834,12 @@ var Game = {
     if (q.main) {
       var next = QUESTS.filter(function (x) { return x.prev === qid; })[0];
       if (next) {
-        this.quests[next.id] = { p: 0 };
-        this.toast('新主线：【' + next.name + '】（' + questGiveText(next) + '）');
+        var p0 = 0;
+        /* 任意捕捉型主线：回填此前已完成的捕捉（新手在 m1 期间结的契不算白费） */
+        if (next.goal.type === 'capture' && next.goal.any) p0 = Math.min(next.goal.n, this.stats.statCatch);
+        this.quests[next.id] = { p: p0 };
+        this.toast('新主线：【' + next.name + '】（' + questGiveText(next) + '）' +
+          (p0 > 0 ? '（此前结契已计入 ' + p0 + '/' + next.goal.n + '）' : ''));
       }
     }
     this.save();
@@ -661,6 +866,8 @@ var Game = {
       this.dexBeat(mob.spId);
       this.flags['boss_' + mapId] = 1;
       this.bossState[mapId] = { alive: false, t: this.map.def.boss.respawn };
+      /* 唤魂随主消散：BOSS 倒下后不再留小怪看门 */
+      this.mobs = this.mobs.filter(function (m) { return !m.summoned; });
       this.questEvent('boss', { map: mapId, sp: mob.spId });
       this.toast('击败守护者 ' + mob.sp.name + '！');
       if (mob.spId === 'dijiang' && !this.stats.killedDijiang) {
@@ -702,15 +909,24 @@ var Game = {
     var self = this;
     if (this._respawning) return;          /* 死亡演出期间不吃二次结算 */
     this._respawning = true;
+    this._fadeGen = (this._fadeGen || 0) + 1;   /* 代号：期间发生读档则放弃本次回城 */
+    var gen = this._fadeGen;
     this.flash('rgba(120,0,0,0.5)');
     SFX.play('fail');
+    /* 死亡代价：损失 5% 现金（复活不再是免费回城券） */
+    var lost = Math.floor(this.player.gold * 0.05);
+    if (lost > 0) {
+      this.player.gold -= lost;
+      this.addFloat(this.player.x, this.player.y - 60, '-' + lost + ' 金', '#d89090', 14);
+    }
     UI.fade(function () {
+      if (self._fadeGen !== gen) return;   /* 已被读档/导档取代：不再覆盖 */
       self._respawning = false;
       self.player.hp = Math.round(self.player.st.hp * 0.7);
       self.player.mp = self.player.st.mp;
       self.player.status = {};
       self.gotoMap('village', 20, 17);
-      self.toast('你在昏迷中被村民抬回了落霞村……');
+      self.toast('你在昏迷中被村民抬回了落霞村……' + (lost > 0 ? '（诊疗费 ' + lost + ' 金）' : ''));
     });
   },
 
@@ -755,16 +971,24 @@ var Game = {
   SAVE_KEY: 'shanhai_save_v1',
   save: function () {
     if (!this.player) return;
+    /* 灵宠实时状态落盘（防 F5 读档免费满血复活濒死灵宠） */
+    this.pets.forEach(function (p) {
+      p.rec.hp = Math.max(1, Math.round(p.hp));
+      p.rec.downT = p.downT > 0 ? p.downT : 0;
+    });
     var data = {
       v: 1,
       name: this.player.name, cls: this.player.cls,
       lv: this.player.lv, exp: this.player.exp, gold: this.player.gold,
       hp: this.player.hp, mp: this.player.mp,
       equip: this.player.equip, equipBag: this.player.equipBag,
+      skill: this.player.skill, skillPts: this.player.skillPts,
       bag: this.bag, spirits: this.spirits, team: this.team,
       dex: this.dex, quests: this.quests, questsDone: this.questsDone,
       flags: this.flags, visited: this.visited, bossState: this.bossState,
       petMode: this.petMode, stats: this.stats, achv: this.achv,
+      bounty: this.bounty,
+      gatherCd: this.snapshotGathers(),
       mapId: this.map ? this.map.id : 'village',
       x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE),
       playTime: this.playTime
@@ -774,10 +998,18 @@ var Game = {
   load: function () {
     var d = Store.get(this.SAVE_KEY);
     if (!d) return false;
+    /* 坏档防线：结构不全/数值坏死的档拒载，继续旅程不静默死机 */
+    if (!CLASSES[d.cls]) { Store.del(this.SAVE_KEY); return false; }
+    if (!MAPS[d.mapId]) d.mapId = 'village';
+    if (typeof d.lv !== 'number' || !isFinite(d.lv) || d.lv < 1) d.lv = 1;
+    if (typeof d.hp !== 'number' || !isFinite(d.hp) || d.hp < 1) d.hp = 0;
+    if (typeof d.mp !== 'number' || !isFinite(d.mp) || d.mp < 0) d.mp = 0;
     var P = new Player(d.cls, d.name);
     P.lv = d.lv; P.exp = d.exp; P.gold = d.gold;
     P.equip = d.equip || P.equip;
     P.equipBag = d.equipBag || [];
+    P.skill = d.skill || {};
+    P.skillPts = typeof d.skillPts === 'number' ? d.skillPts : 1;
     P.recalc();
     P.hp = U.clamp(d.hp || P.st.hp, 1, P.st.hp);
     P.mp = U.clamp(d.mp || P.st.mp, 0, P.st.mp);
@@ -795,6 +1027,9 @@ var Game = {
     this.stats = d.stats || this.stats;
     this.achv = d.achv || {};
     this.playTime = d.playTime || 0;
+    this.bounty = d.bounty || null;
+    this.mapCache = {};                          /* 读档重建地图：防跨档污染 */
+    this.gatherRestore = d.gatherCd || {};
     /* 旧档兜底：bossState 缺失字段 */
     Object.keys(MAPS).forEach(function (mid) {
       if (MAPS[mid].boss && !this.bossState[mid]) {
@@ -809,25 +1044,47 @@ var Game = {
     return JSON.stringify(Store.get(this.SAVE_KEY) || {});
   },
   importSave: function (json) {
+    var backup = Store.get(this.SAVE_KEY);
     try {
       var d = JSON.parse(json);
       if (!d || !d.cls || !CLASSES[d.cls]) return false;
-      /* 清洗：过滤掉引用不存在装备/灵物种族的脏数据，防读档崩溃 */
+      /* 清洗：过滤掉引用不存在装备/灵物种族/道具/性格/地图的脏数据，防读档崩溃 */
       if (d.equip) Object.keys(d.equip).forEach(function (k) {
         if (d.equip[k] && !EQUIPS[d.equip[k].id]) d.equip[k] = null;
       });
       if (d.equipBag) d.equipBag = d.equipBag.filter(function (e) { return e && EQUIPS[e.id]; });
       if (d.spirits) d.spirits = d.spirits.filter(function (s) { return s && SPECIES[s.sp]; });
+      if (d.spirits) d.spirits.forEach(function (s) {
+        if (!TEMPERS[s.temper]) s.temper = 'calm';
+        if (typeof s.iv !== 'number') s.iv = 8;
+      });
+      if (d.bag) {
+        var cleanBag = {};
+        Object.keys(d.bag).forEach(function (k) { if (ITEMS[k] && d.bag[k] > 0) cleanBag[k] = d.bag[k]; });
+        d.bag = cleanBag;
+      }
+      if (!MAPS[d.mapId]) d.mapId = 'village';
+      if (typeof d.x !== 'number' || !isFinite(d.x) || d.x < 1) d.x = 20;
+      if (typeof d.y !== 'number' || !isFinite(d.y) || d.y < 1) d.y = 17;
       if (d.team) d.team = d.team.map(function (uid) {
         return d.spirits.some(function (s) { return s.uid === uid; }) ? uid : null;
       });
       Store.set(this.SAVE_KEY, d);
-      return this.load();
+      try {
+        return this.load();
+      } catch (e) {
+        /* 读档失败：回滚到导入前的存档，不能让坏档覆盖掉原进度 */
+        if (backup) Store.set(this.SAVE_KEY, backup);
+        return false;
+      }
     } catch (e) { return false; }
   },
 
   /* ===================== 反馈工具 ===================== */
-  addFloat: function (x, y, text, color, size) { this.floats.push(new FloatText(x, y, text, color, size)); },
+  addFloat: function (x, y, text, color, size) {
+    if (this.floats.length >= 60) this.floats.shift();   /* 满压场景浮字有上限（对齐 fx=110 口径） */
+    this.floats.push(new FloatText(x, y, text, color, size));
+  },
   addFx: function (o) { if (this.fx.length < 110) this.fx.push(new Effect(o)); },
   toast: function (text) { UI.toast(text); },
   nudge: function (x, y, text) {
@@ -882,10 +1139,13 @@ var Game = {
     /* 3. Y 排序绘制：装饰 / NPC / 怪 / 宠 / 玩家 / 掉落 */
     var draws = [];
     this.map.deco.forEach(function (d) {
+      /* 视口裁剪：屏幕外的装饰不进 Y 排序（最大图 200+ 装饰） */
+      var dx0 = d.x * TILE - 16 - cam.x, dy0 = d.y * TILE - 48 - cam.y;
+      if (dx0 < -70 || dx0 > this.W + 70 || dy0 < -90 || dy0 > this.H + 90) return;
       draws.push({ y: d.y * TILE + 20, fn: function () {
-        g.drawImage(Sprites.decoCv(d.kind), d.x * TILE - 16 - cam.x, d.y * TILE - 48 - cam.y);
+        g.drawImage(Sprites.decoCv(d.kind), dx0, dy0);
       } });
-    });
+    }, this);
     (this.map.def.npcs || []).forEach(function (n) {
       draws.push({ y: n.y * TILE + 20, fn: function () {
         var cv = Sprites.npcCv(n.face, Math.floor(Game.time * 1.6) % 2);
@@ -916,6 +1176,19 @@ var Game = {
     this.pets.forEach(function (p) {
       draws.push({ y: p.y, fn: function () { p.draw(g); } });
     });
+    (this.map.gathers || []).forEach(function (gd) {
+      if (!gd.ready) return;
+      var spr = GATHER_DEFS[gd.kind].sprite;
+      draws.push({ y: gd.y, fn: function () {
+        g.drawImage(Sprites.decoCv(spr), Math.round(gd.x - 16 - cam.x), Math.round(gd.y - 48 - cam.y));
+        /* 采集点微光提示 */
+        g.save();
+        g.globalAlpha = 0.5 + Math.sin(Game.time * 3 + gd.tx) * 0.25;
+        g.fillStyle = '#aef0a0';
+        g.fillRect(Math.round(gd.x - 1 - cam.x), Math.round(gd.y - 52 - cam.y), 2, 4);
+        g.restore();
+      } });
+    });
     draws.push({ y: this.player.y, fn: function () { Game.player.draw(g); } });
     this.pickups.forEach(function (p) {
       draws.push({ y: p.y - 14, fn: function () { p.draw(g); } });
@@ -935,18 +1208,26 @@ var Game = {
       lg.clearRect(0, 0, this.W, this.H);
       lg.fillStyle = 'rgba(8,6,18,0.46)';
       lg.fillRect(0, 0, this.W, this.H);
+      /* 光洞用预烘焙径向贴图缩放绘制（替代每帧 20+ 个 RadialGradient） */
+      if (!Game._holeCv) {
+        var hc = document.createElement('canvas');
+        hc.width = 128; hc.height = 128;
+        var hg2 = hc.getContext('2d');
+        var hgrad = hg2.createRadialGradient(64, 64, 12, 64, 64, 64);
+        hgrad.addColorStop(0, 'rgba(0,0,0,1)');
+        hgrad.addColorStop(1, 'rgba(0,0,0,0)');
+        hg2.fillStyle = hgrad;
+        hg2.beginPath(); hg2.arc(64, 64, 64, 0, 6.28); hg2.fill();
+        Game._holeCv = hc;
+      }
+      lg.globalCompositeOperation = 'destination-out';
       function hole(x, y, r) {
-        var grad = lg.createRadialGradient(x - cam.x, y - cam.y, r * 0.2, x - cam.x, y - cam.y, r);
-        grad.addColorStop(0, 'rgba(0,0,0,1)');
-        grad.addColorStop(1, 'rgba(0,0,0,0)');
-        lg.globalCompositeOperation = 'destination-out';
-        lg.fillStyle = grad;
-        lg.beginPath(); lg.arc(x - cam.x, y - cam.y, r, 0, 6.28); lg.fill();
-        lg.globalCompositeOperation = 'source-over';
+        lg.drawImage(Game._holeCv, x - cam.x - r, y - cam.y - r, r * 2, r * 2);
       }
       hole(this.player.x, this.player.y, 330);
       this.map.lights.forEach(function (L) { hole(L.x, L.y, L.r); });
       this.mobs.forEach(function (m) { if (m.alive) hole(m.x, m.y, 70); });
+      lg.globalCompositeOperation = 'source-over';
       g.drawImage(this.lightCv, 0, 0);
     }
 
@@ -1009,21 +1290,20 @@ var Game = {
       g.fillStyle = '#ffe9b8';
       g.fillText(this.interactHint, this.W / 2, this.H - 81);
     }
-    /* 10. 捕捉准星提示 */
-    if (Input.pressed) { }
+    /* 10. 捕捉准星提示（与 tryCapture 共用同一目标选择，绝不各说各话） */
     var capTarget = null;
-    if (!this.capture) {
-      for (var c = 0; c < this.mobs.length; c++) {
-        var mm2 = this.mobs[c];
-        if (mm2.alive && !mm2.boss && !mm2.summoned && U.dist2(mm2.x, mm2.y, this.player.x, this.player.y) < 300 * 300) { capTarget = mm2; break; }
-      }
-    }
+    if (!this.capture) capTarget = Battle.captureTarget(this.player, 300);
     if (capTarget) {
       var cxx = capTarget.x - cam.x, cyy = capTarget.y - capTarget.r - 54 - cam.y;
       g.font = '11px "Microsoft YaHei", sans-serif';
       g.textAlign = 'center';
-      g.fillStyle = 'rgba(255,220,140,0.9)';
-      g.fillText('E 捕捉', cxx, cyy);
+      var ball0 = Battle.bestBall();
+      var rateTxt = ball0 ? Math.round(U.clamp(Battle.captureRate(capTarget, ball0), 0, 1) * 100) + '%' : '无索';
+      g.fillStyle = 'rgba(16,12,24,0.6)';
+      var tw = g.measureText('E 捕捉 ' + rateTxt).width + 10;
+      g.fillRect(cxx - tw / 2, cyy - 11, tw, 15);
+      g.fillStyle = capTarget.hp < capTarget.st.hp * 0.35 ? '#a0f0a0' : 'rgba(255,220,140,0.9)';
+      g.fillText('E 捕捉 ' + rateTxt, cxx, cyy);
     }
   },
 
