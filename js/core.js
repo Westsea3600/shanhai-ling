@@ -79,7 +79,8 @@ function makeNoise(seed) {
 
 /* ---------------- 输入 ---------------- */
 var Input = {
-  keys: {}, once: {}, mouse: { x: 0, y: 0, down: false, clicked: false, rdown: false },
+  keys: {}, once: {}, evtT: {},   /* evtT: 每个键最近一次 keydown 事件时间（含自动重复） */
+  mouse: { x: 0, y: 0, down: false, clicked: false, rdown: false, rclicked: false },
   init: function (canvas) {
     var self = this;
     if (typeof window === 'undefined') return;
@@ -90,9 +91,19 @@ var Input = {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'Tab', 'F5', 'F11'].indexOf(e.code) >= 0) e.preventDefault();
       if (!self.keys[e.code]) self.once[e.code] = true;
       self.keys[e.code] = true;
+      self.evtT[e.code] = performance.now();
     });
-    window.addEventListener('keyup', function (e) { self.keys[e.code] = false; });
-    window.addEventListener('blur', function () { self.keys = {}; });
+    window.addEventListener('keyup', function (e) {
+      self.keys[e.code] = false;
+      delete self.evtT[e.code];
+    });
+    window.addEventListener('blur', function () { self.clearAll(); });
+    /* 部分环境下窗口切走只触发 visibilitychange 不触发 blur */
+    if (document.visibilityState !== undefined) {
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') self.clearAll();
+      });
+    }
     /* 右键用于点地移动，屏蔽页面原生菜单 */
     document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
     if (!canvas) return;
@@ -103,7 +114,7 @@ var Input = {
     });
     canvas.addEventListener('mousedown', function (e) {
       if (e.button === 0) { self.mouse.down = true; self.mouse.clicked = true; }
-      if (e.button === 2) { self.mouse.rdown = true; }
+      if (e.button === 2) { self.mouse.rdown = true; self.mouse.rclicked = true; }
       e.preventDefault();
     });
     window.addEventListener('mouseup', function (e) {
@@ -113,7 +124,21 @@ var Input = {
   },
   down: function (c) { return !!this.keys[c]; },
   pressed: function (c) { return !!this.once[c]; },
-  endFrame: function () { this.once = {}; this.mouse.clicked = false; }
+  endFrame: function () { this.once = {}; this.mouse.clicked = false; this.mouse.rclicked = false; },
+  clearAll: function () { this.keys = {}; this.once = {}; this.evtT = {}; this.mouse.down = false; this.mouse.rdown = false; this.mouse.clicked = false; this.mouse.rclicked = false; },
+  /* 卡键自愈：真实按住的键会持续触发 keydown 自动重复；keyup 被输入法/系统吞掉后
+     evtT 不再更新，超过 2.5 秒即视为幽灵键清除。直接写入 keys 的测试桩不经事件层，不受影响。 */
+  healStuck: function (now) {
+    var changed = false;
+    for (var k in this.evtT) {
+      if (this.keys[k] && now - this.evtT[k] > 2500) {
+        this.keys[k] = false;
+        delete this.evtT[k];
+        changed = true;
+      }
+    }
+    return changed;
+  }
 };
 
 /* ---------------- 音效（WebAudio 合成，零外部资源） ---------------- */

@@ -116,6 +116,7 @@ var Game = {
     this.player.x = free.x * TILE + 16;
     this.player.y = free.y * TILE + 16;
     this.player.path = null;
+    this.spawnProt = 2.5;                     /* 落地保护：传送门出口常挨着怪群（旧图的怪随数组一起重建，无需清仇恨） */
     this.mobs = []; this.shots = []; this.fx = []; this.floats = []; this.pickups = [];
     this.sched = [];                           /* 旧图的延时弹幕/剑雨不再跟随 */
     this.capture = null;
@@ -135,7 +136,7 @@ var Game = {
     this.event = null; this.eventCd = U.rand(35, 55);
     this.caravanNpc = null;
     this.save();
-    UI.toast('来到 ' + def.name + (def.safe ? '（安全区）' : '　推荐等级 Lv.' + def.lv[0] + '-' + def.lv[1]));
+    if (UI.open !== 'prologue') UI.toast('来到 ' + def.name + (def.safe ? '（安全区）' : '　推荐等级 Lv.' + def.lv[0] + '-' + def.lv[1]));
   },
 
   refreshPets: function () {
@@ -394,6 +395,7 @@ var Game = {
   },
   loop: function (t) {
     this._loopTick = performance.now();
+    Input.healStuck(this._loopTick);
     var dt = Math.min(0.05, (t - this.lastT) / 1000 || 0.016);
     this.lastT = t;
     this.time += dt;
@@ -467,6 +469,8 @@ var Game = {
       }
     });
     if (this.shakeT > 0) this.shakeT -= dt;
+    if (this._fNudgeCd > 0) this._fNudgeCd -= dt;
+    if (this.spawnProt > 0) this.spawnProt -= dt;
     if (this.flashT > 0) this.flashT -= dt;
     if (this.hurtFlash > 0) this.hurtFlash -= dt;
     this.updateAchv();
@@ -555,18 +559,25 @@ var Game = {
     if (Input.pressed('KeyM')) UI.openMenu('dex');   /* M 打开图鉴（D 已被向右移动占用） */
     /* Esc/Tab 已由 UI 层 document 监听统一接管（面板开时游戏循环停更，这里读不到） */
     if (Input.pressed('F5')) { this.save(); this.toast('已保存'); }
-    /* 右键点地移动 */
-    if (Input.mouse.rdown && !this._rLatch) {
+    /* 右键点地移动（快速单击也要响应：rclicked 一次性标志跨帧不丢） */
+    if ((Input.mouse.rdown || Input.mouse.rclicked) && !this._rLatch) {
       this._rLatch = true;
       var wx = Input.mouse.x + this.cam.x, wy = Input.mouse.y + this.cam.y;
       var path = this.map.findPath(P.x, P.y, wx, wy);
       if (path) P.path = path;
     }
-    if (!Input.mouse.rdown) this._rLatch = false;
+    if (!Input.mouse.rdown && !Input.mouse.rclicked) this._rLatch = false;
   },
   doInteract: function () {
     var it = this.nearestInteract();
-    if (!it) return;
+    if (!it) {
+      /* 赶路顺路按 F 时给个轻提示，不再无声无息（寻路中 hint 常为空） */
+      if (this._fNudgeCd === undefined || this._fNudgeCd <= 0) {
+        this._fNudgeCd = 1.5;
+        this.nudge(this.player.x, this.player.y - 44, '附近没有可交互的目标（F 对话/采集/传送）');
+      }
+      return;
+    }
     if (it.type === 'portal') {
       var p = it.p;
       if (this.player.lv < (p.needLv || 1)) {

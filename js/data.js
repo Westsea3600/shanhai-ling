@@ -930,7 +930,7 @@ var QUESTS = [
     goal: { type: 'boss', map: 'liusha', n: 3 }, reward: { gold: 3000, exp: 2600, items: [['shanhaiyin', 2], ['dahun', 4]] } }
 ];
 function questGiveText(q) {
-  var who = { elder: '村长·姜石', lingyu: '御灵师·青鸟', tongzi: '拾穗童子', caiyao: '采药人·杜蘅', xingzhe: '火泽行者·燧', shouling: '守陵人·烛九', yufu: '雷泽渔父', smith: '铁匠·石敢当', lieren: '雪原猎户·白罴', taozao: '守林人·桃夭', tuoling: '沙行客·驼铃' };
+  var who = { elder: '村长·姜石', lingyu: '御灵师·青鸟', tongzi: '拾穗童子', caiyao: '采药人·杜蘅', xingzhe: '火泽行者·燧', shouling: '守陵人·烛九', yufu: '雷泽渔父', smith: '铁匠·石敢当', lieren: '雪原猎户·白罴', taozao: '守林人·桃夭', tuoling: '沙行客·驼铃', healer: '灵医·白芷', shopper: '杂货商·幺妹' };
   return (who[q.giver] || '') + '（' + MAPS[q.giverMap].name + '）';
 }
 

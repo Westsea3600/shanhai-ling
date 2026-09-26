@@ -114,6 +114,7 @@ GameMap.prototype.generate = function () {
   var keys = [{ x: cx, y: cy }];
   (d.portals || []).forEach(function (p) { keys.push({ x: p.x, y: p.y }); });
   (d.npcs || []).forEach(function (p) { keys.push({ x: p.x, y: p.y }); });
+  if (d.board) keys.push({ x: d.board.x, y: d.board.y + 2 });   /* 牌前落脚点也算关键点 */
   if (d.boss) {
     this.bossPt = { x: W - 8, y: 8 };
     keys.push(this.bossPt);
@@ -402,8 +403,8 @@ GameMap.prototype.placeDeco = function (rnd) {
     put('house2', 33, 9, true); put('house', 10, 27, true);
     if (d.board) {
       put('board', d.board.x, d.board.y, true);
-      /* 牌前清出行走位 */
-      for (var bj = -1; bj <= 1; bj++) for (var bi = -1; bi <= 1; bi++) {
+      /* 牌前清出宽敞行走位（5×3：牌子不与房线合成堵墙，寻路有横向绕行空间） */
+      for (var bj = -1; bj <= 1; bj++) for (var bi = -2; bi <= 2; bi++) {
         var vx = U.clamp(d.board.x + bi, 1, this.w - 2), vy = U.clamp(d.board.y + 2 + bj, 1, this.h - 2);
         if (TILE_SOLID[this.t[this.idx(vx, vy)] || '']) this.t[this.idx(vx, vy)] = 'wd';
       }

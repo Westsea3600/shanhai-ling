@@ -197,7 +197,7 @@ Player.prototype.update = function (dt) {
   var st = this.st;
   /* 冷却与增益 */
   var keys = Object.keys(this.cd);
-  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] -= dt;
+  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] = Math.max(0, this.cd[keys[i]] - dt);
   var expired = false;
   this.buffs.forEach(function (b) { b.t -= dt; if (b.t <= 0) expired = true; });
   if (expired) { this.buffs = this.buffs.filter(function (b) { return b.t > 0; }); this.recalc(); }
@@ -273,9 +273,9 @@ Player.prototype.update = function (dt) {
     }
   }
 
-  /* --- 攻击输入（1~6 对应技能栏 6 格；普攻走左键/空格） --- */
-  if (Input.mouse.down || Input.down('Space')) Battle.playerCast(this, 'basic', target);
-  else if (this.auto && target) Battle.playerCast(this, 'basic', target);   /* 自动战斗自动出手 */
+  /* --- 攻击输入（1~6 对应技能栏 6 格；普攻走左键/空格；单击用一次性标志跨帧不丢） --- */
+  if (Input.mouse.down || Input.mouse.clicked || Input.down('Space') || Input.pressed('Space')) Battle.playerCast(this, 'basic', target);
+  else if (this.auto && target && !Game.capture) Battle.playerCast(this, 'basic', target);   /* 自动战斗自动出手（捕捉中停手，别把球里的目标打死） */
   if (Input.pressed('Digit1')) Battle.playerCast(this, 1, target);
   if (Input.pressed('Digit2')) Battle.playerCast(this, 2, target);
   if (Input.pressed('Digit3')) Battle.playerCast(this, 3, target);
@@ -298,6 +298,8 @@ Player.prototype.update = function (dt) {
 Player.prototype.draw = function (g) {
   var sx = this.x - Game.cam.x, sy = this.y - Game.cam.y;
   this.drawShadow(g);
+  /* 落地保护期呼吸闪烁，让玩家知道此刻无敌 */
+  if (Game.spawnProt > 0) g.globalAlpha = 0.55 + 0.35 * Math.abs(Math.sin(Game.time * 9));
   var frame = (Math.floor(this.walkT) % 2);
   var cv = Sprites.playerCv(this.cls, this.tier(), frame, this.face < 0);
   g.drawImage(cv, Math.round(sx - 16), Math.round(sy - 40));
@@ -317,6 +319,7 @@ Player.prototype.draw = function (g) {
     g.fillRect(sx - 14, sy - 38, 28, 40);
     g.globalCompositeOperation = 'source-over';
   }
+  g.globalAlpha = 1;
   this.drawStatusIcons(g, sx, sy - 46);
 };
 Actor.prototype.drawStatusIcons = function (g, sx, topY) {
@@ -365,7 +368,7 @@ PetActor.prototype.down = function () {
 };
 PetActor.prototype.update = function (dt) {
   var keys = Object.keys(this.cd);
-  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] -= dt;
+  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] = Math.max(0, this.cd[keys[i]] - dt);
   if (this.downT > 0) {
     var inCombat = Game.player.combatT > 0;
     var wait = inCombat ? 14 : 8;
@@ -568,7 +571,7 @@ Monster.prototype.aggroRange = function () {
 };
 Monster.prototype.update = function (dt) {
   var keys = Object.keys(this.cd);
-  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] -= dt;
+  for (var i = 0; i < keys.length; i++) if (this.cd[keys[i]] > 0) this.cd[keys[i]] = Math.max(0, this.cd[keys[i]] - dt);
   this.tickStatus(dt);
   this.tickKnock(dt);
   if (this.isStunned()) return;
@@ -610,7 +613,8 @@ Monster.prototype.update = function (dt) {
   }
 
   if (this.target && !this.isRooted()) {
-    /* 追击 / 施法 */
+    /* 追击 / 施法（局部引用：mobCast 击杀玩家会触发重生换图，中途可能改写 this.target） */
+    var tgt = this.target;
     var did = false;
     for (var s = this.skills.length - 1; s >= 0 && !did; s--) {
       var sid = this.skills[s], sk = SKILLS[sid];
@@ -620,15 +624,16 @@ Monster.prototype.update = function (dt) {
       if (sk.kind === 'aoe' || sk.kind === 'rain') rng = sk.radius || 100;
       if (sk.kind === 'dash') rng = 220;
       if (sk.kind === 'summon') rng = 400;
-      var d3 = U.dist(this.x, this.y, this.target.x, this.target.y);
-      if (d3 < rng) { Battle.mobCast(this, sid, this.target); did = true; }
+      var d3 = U.dist(this.x, this.y, tgt.x, tgt.y);
+      if (d3 < rng) { Battle.mobCast(this, sid, tgt); did = true; }
     }
+    if (!this.target) return;                 /* 目标在施法途中失效（如玩家死亡重生） */
     var sk2 = SKILLS[this.skills[this.skills.length - 1]] || SKILLS.tackle;
-    var want = sk2.kind === 'shot' ? 170 : (this.r + this.target.r + 8);
-    var dd = U.dist(this.x, this.y, this.target.x, this.target.y);
-    if (dd > want) this.moveToward(this.target.x, this.target.y, dt);
+    var want = sk2.kind === 'shot' ? 170 : (this.r + tgt.r + 8);
+    var dd = U.dist(this.x, this.y, tgt.x, tgt.y);
+    if (dd > want) this.moveToward(tgt.x, tgt.y, dt);
     else if (dd < want - 50 && sk2.kind === 'shot') {
-      var away2 = U.ang(this.target.x, this.target.y, this.x, this.y);
+      var away2 = U.ang(tgt.x, tgt.y, this.x, this.y);
       this.moveBy(Math.cos(away2) * this.st.spd * 0.7 * dt, Math.sin(away2) * this.st.spd * 0.7 * dt);
     }
   } else if (!this.isRooted()) {

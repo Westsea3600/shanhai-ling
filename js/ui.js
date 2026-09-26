@@ -34,6 +34,10 @@ var UI = {
         } else if (Game.state === 'play') {
           self.openMenu('sys');   /* 无面板时 Esc 打开系统页 */
         }
+      } else if (self.open === 'menu') {
+        /* 面板已开时，面板快捷键直接切 tab（游戏停更时 checkHotkeys 读不到） */
+        var hotTab = { KeyB: 'bag', KeyP: 'spirit', KeyJ: 'quest', KeyC: 'char', KeyK: 'skill', KeyM: 'dex' }[e.code];
+        if (hotTab) { e.preventDefault(); self.menuTab = hotTab; self.renderMenu(); }
       } else if (self.open === 'title' && e.code === 'Enter') {
         var btn = document.querySelector('[data-act="start"]');
         if (btn) btn.click();
@@ -63,6 +67,18 @@ var UI = {
       while (el && el !== self.$overlay) {
         if (el.getAttribute && el.getAttribute('data-dbl')) {
           self.action(el.getAttribute('data-dbl'), el.getAttribute('data-arg'), el);
+          e.stopPropagation();
+          return;
+        }
+        el = el.parentNode;
+      }
+    });
+    /* HUD 上的 data-act（灵宠战术/自动战斗芯片）也走同一套委托 */
+    this.$hud.addEventListener('click', function (e) {
+      var el = e.target;
+      while (el && el !== self.$hud) {
+        if (el.getAttribute && el.getAttribute('data-act')) {
+          self.action(el.getAttribute('data-act'), el.getAttribute('data-arg'), el);
           e.stopPropagation();
           return;
         }
@@ -294,6 +310,9 @@ var UI = {
     this.open = '';
     this.$overlay.innerHTML = '';
     this.$overlay.classList.remove('show');
+    /* 面板关闭是天然的输入复位点：清掉可能卡住的按键/鼠标态
+       （keyup 被输入法或系统吞掉时，否则角色会不受控地一直走） */
+    Input.clearAll();
   },
   renderMenu: function () {
     var tabs = [
@@ -419,7 +438,7 @@ var UI = {
     var equips = P.equipBag.length ? P.equipBag.map(function (e, idx) {
       var d = EQUIPS[e.id];
       var st = equipStats(d, e.plus || 0);
-      var stStr = Object.keys(st).map(function (k) {
+      var stStr = Object.keys(st).filter(function (k) { return st[k]; }).map(function (k) {
         return { atk: '攻', def: '防', hp: '命', mp: '魔', spd: '速', crit: '暴' }[k] + '+' + st[k];
       }).join(' ');
       return '<div class="equip-row" data-act="equipInfo" data-arg="' + idx + '" data-dbl="equip" title="' + equipName(e.id, e.plus || 0) + '">' +
@@ -494,7 +513,7 @@ var UI = {
         var got = Game.flags.stelaeFound && Game.flags.stelaeFound[st.id];
         return '<div class="dex-cell ' + (got ? 'got' : 'unk') + '" title="' + (got ? st.name + '（' + MAPS[st.map].name + '）' : '未发现 · ' + MAPS[st.map].name) + '">' +
           (got ? '<span>◈</span>' : '<div class="silh">?</div>') +
-          '<span>' + (got ? st.name : MAPS[st.map].name + '？') + '</span></div>';
+          '<span>' + (got ? st.name : '？（' + MAPS[st.map].name + '有碑）') + '</span></div>';
       }).join('') + '</div>' +
       '<div class="dex-grid">' + cells + '</div>';
   },
@@ -564,6 +583,29 @@ var UI = {
   },
 
   /* ===================== 对话 ===================== */
+  /* 闲聊：把该 NPC 当前进位下所有台词循环着聊（每点一次换一句，不再原地重绘） */
+  showLore: function (npcId) {
+    var pool = (NPC_LINES[npcId] || []).filter(function (LN) { return !LN.if || LN.if(Game); })
+      .map(function (LN) { return LN.t; });
+    if (!pool.length) pool = ['……'];
+    this._loreIdx = (this._loreIdx || 0);
+    var txt = pool[this._loreIdx % pool.length];
+    this._loreIdx = (this._loreIdx + 1) % Math.max(1, pool.length);
+    var npc = null;
+    (Game.map.def.npcs || []).forEach(function (n) { if (n.id === npcId) npc = n; });
+    this.open = 'dialog';
+    this.talkNpc = npcId;
+    this.$overlay.innerHTML =
+      '<div class="dialog-box">' +
+      '<div class="dlg-head"><img class="dlg-face" src="' + Sprites.npcCv(npc ? npc.face : 'elder', 0).toDataURL() + '">' +
+      '<div class="dlg-name">' + (npc ? npc.name : '') + '</div></div>' +
+      '<div class="dlg-text">' + txt + '</div>' +
+      '<div class="dlg-opts">' +
+      '<div class="dlg-opt" data-act="lore" data-arg="' + npcId + '">接着聊（' + pool.length + ' 句）</div>' +
+      '<div class="dlg-opt" data-act="close">告辞</div>' +
+      '</div></div>';
+    this.$overlay.classList.add('show');
+  },
   npcMark: function (npcId) {
     var ready = false, canAccept = false;
     Object.keys(Game.quests).forEach(function (qid) {
@@ -668,7 +710,7 @@ var UI = {
           if (!ed) return '';
           if (ed.slot === 'weapon' && ed.wt !== CLASSES[P.cls].weapon) return '';
           var stS = equipStats(ed, 0);
-          var stStr = Object.keys(stS).map(function (k) {
+          var stStr = Object.keys(stS).filter(function (k) { return stS[k]; }).map(function (k) {
             return { atk: '攻', def: '防', hp: '命', mp: '魔', spd: '速', crit: '暴' }[k] + '+' + stS[k];
           }).join(' ');
           return '<div class="shop-row">' +
@@ -805,7 +847,7 @@ var UI = {
           var d = EQUIPS[id];
           if (d.slot === 'weapon' && d.wt !== CLASSES[P.cls].weapon) return '';
           var st = equipStats(d, 0);
-          var stStr = Object.keys(st).map(function (k) {
+          var stStr = Object.keys(st).filter(function (k) { return st[k]; }).map(function (k) {
             return { atk: '攻', def: '防', hp: '命', mp: '魔', spd: '速', crit: '暴' }[k] + '+' + st[k];
           }).join(' ');
           return '<div class="shop-row">' +
@@ -862,8 +904,9 @@ var UI = {
     this.closePopup();
     var box = document.createElement('div');
     box.className = 'popup-box';
+    /* 注意：不要在 box 上 stopPropagation——按钮靠 overlay 的事件委托响应，
+       拦截冒泡会让弹窗里所有 data-act 按钮（放生/装备/传送/导入）全部失灵 */
     box.innerHTML = html + '<div class="dlg-opt" data-act="closePopup">关闭</div>';
-    box.addEventListener('click', function (e) { e.stopPropagation(); });
     this.$overlay.appendChild(box);
   },
   closePopup: function () {
@@ -1066,6 +1109,9 @@ var UI = {
             (path4 ? '（道途·' + SKILL_PATHS[path4].name + '）' : ''));
           if (path4) Game.toast('道途已定：' + SKILL_PATHS[path4].desc);
           Game.save();
+        } else if (P.skillPts < 1) {
+          Game.toast('灵纹不足：升级获得灵纹后才能修炼（当前 ' + P.skillPts + '）');
+          SFX.play('fail');
         }
         this.renderMenu();
         break;
@@ -1074,8 +1120,14 @@ var UI = {
       case 'craftIt': {
         var r4 = RECIPES.filter(function (x) { return x.id === arg; })[0];
         if (!r4) break;
-        var can = r4.need.every(function (nd) { return (Game.bag[nd[0]] || 0) >= nd[1]; }) && P.gold >= r4.gold;
-        if (!can) break;
+        var lackMat = r4.need.filter(function (nd) { return (Game.bag[nd[0]] || 0) < nd[1]; })
+          .map(function (nd) { return ITEMS[nd[0]] ? ITEMS[nd[0]].name : nd[0]; });
+        var can = !lackMat.length && P.gold >= r4.gold;
+        if (!can) {
+          Game.toast('炼不成：' + (lackMat.length ? '缺素材 ' + lackMat.join('、') : '金币不够') + (lackMat.length && P.gold < r4.gold ? '，且金币不够' : ''));
+          SFX.play('fail');
+          break;
+        }
         r4.need.forEach(function (nd) {
           Game.bag[nd[0]] -= nd[1];
           if (Game.bag[nd[0]] <= 0) delete Game.bag[nd[0]];
@@ -1195,7 +1247,7 @@ var UI = {
         this.talk(this.talkNpc);
         break;
       }
-      case 'lore': this.talk(this.talkNpc); break;
+      case 'lore': this.showLore(this.talkNpc); break;
       case 'craft': this.openCraft(); break;
       /* 商店 */
       case 'shopTab': this.shopTab = arg; this.renderShop(); break;
@@ -1207,7 +1259,7 @@ var UI = {
           SFX.play('buy');
           Game.save();
           this.renderShop();
-        }
+        } else { Game.toast('金币不够（还差 ' + (d.price - P.gold) + ' 金）'); SFX.play('fail'); }
         break;
       }
       case 'sellItem': {
@@ -1230,7 +1282,7 @@ var UI = {
           Game.save();
           if (this.open === 'smith') this.renderSmith();
           else this.renderShop();
-        }
+        } else { Game.toast('金币不够（还差 ' + (ed.price - P.gold) + ' 金）'); SFX.play('fail'); }
         break;
       }
       case 'sellEquip': {
@@ -1253,7 +1305,11 @@ var UI = {
         var d3 = EQUIPS[e3.id];
         var cost = plusCost(d3, e3.plus || 0);
         if ((e3.plus || 0) >= 6) break;
-        if ((Game.bag.xuantie || 0) < cost.xuantie || P.gold < cost.gold) break;
+        if ((Game.bag.xuantie || 0) < cost.xuantie || P.gold < cost.gold) {
+          Game.toast('强化不成：' + ((Game.bag.xuantie || 0) < cost.xuantie ? '玄铁不够（有 ' + (Game.bag.xuantie || 0) + '/' + cost.xuantie + '）' : '金币不够（还差 ' + (cost.gold - P.gold) + '）'));
+          SFX.play('fail');
+          break;
+        }
         Game.bag.xuantie -= cost.xuantie;
         if (Game.bag.xuantie <= 0) delete Game.bag.xuantie;
         P.gold -= cost.gold;
@@ -1384,9 +1440,21 @@ var UI = {
       '<div class="dim">技能：' + skills + '</div>' +
       '<div class="dim">' + evo + '</div>' +
       '<div class="dim tip">濒倒后脱战 8 秒 / 战斗中 14 秒自动归队；灵果可立即救回（白芷处可炼制）</div>' +
-      '<div class="dlg-opt danger-opt" data-act="release" data-arg="' + uid + '">放归山野（永久失去）</div>');
+      '<div class="dlg-opt danger-opt" data-act="release" data-arg="' + uid + '">' +
+      (this._relConfirm === uid && Date.now() - (this._relConfirmT || 0) < 3000
+        ? '⚠ 再点一次确认放归（永久失去！）'
+        : '放归山野（永久失去）') + '</div>');
   },
   releaseSpirit: function (uid) {
+    /* 永久删除要两步确认：第一次点击把按钮点亮成警示态，3 秒内再点才执行 */
+    if (this._relConfirm !== uid || Date.now() - (this._relConfirmT || 0) >= 3000) {
+      this._relConfirm = uid;
+      this._relConfirmT = Date.now();
+      SFX.play('ui');
+      this.spiritInfo(uid);   /* 重绘详情，按钮进入警示态 */
+      return;
+    }
+    this._relConfirm = null;
     Game.spirits = Game.spirits.filter(function (s) { return s.uid !== uid; });
     for (var i = 0; i < 3; i++) if (Game.team[i] === uid) Game.team[i] = null;
     Game.refreshPets();

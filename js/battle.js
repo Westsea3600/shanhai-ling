@@ -30,7 +30,7 @@ var Battle = {
   /* 统一命中入口：caster(Actor) 对 target(Actor) 打出 skill 的伤害 */
   applySkillHit: function (caster, target, sk, opts) {
     if (!target || target.hp <= 0) return;
-    if (target.kind === 'player' && Game._respawning) return;
+    if (target.kind === 'player' && (Game._respawning || Game.spawnProt > 0)) return;
     opts = opts || {};
     var atkEl = sk.el || 'none';
     var defEl = target.sp ? target.sp.el : (target.kind === 'player' ? 'none' : 'none');
